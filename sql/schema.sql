@@ -137,30 +137,62 @@ create table if not exists favorites (
     id uuid primary key default gen_random_uuid(),
     user_id uuid not null references users(id) on delete cascade,
     role_id uuid not null references roles(id) on delete cascade,
+    priority text not null default 'interested'
+        check (priority in ('dream', 'high', 'interested', 'backup')),
+    notes text,
     created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now(),
     unique (user_id, role_id)
 );
 
+-- Safe to re-run against a database created from an earlier version of
+-- this schema, before priority/notes/updated_at existed on favorites.
+alter table favorites add column if not exists priority text not null default 'interested';
+alter table favorites add column if not exists notes text;
+alter table favorites add column if not exists updated_at timestamptz not null default now();
+alter table favorites drop constraint if exists favorites_priority_check;
+alter table favorites add constraint favorites_priority_check
+    check (priority in ('dream', 'high', 'interested', 'backup'));
+
 -- ---------------------------------------------------------------------
 -- applications
--- Pipeline status per (user, role): Discovered -> Saved -> Applied -> OA
--- -> Interview -> Offer / Rejected / Withdrawn.
+-- Pipeline status per (user, role): discovered -> saved -> applied -> oa
+-- -> interview -> offer / rejected / withdrawn.
 -- ---------------------------------------------------------------------
 create table if not exists applications (
     id uuid primary key default gen_random_uuid(),
     user_id uuid not null references users(id) on delete cascade,
     role_id uuid not null references roles(id) on delete cascade,
-    status text not null default 'Discovered'
+    status text not null default 'discovered'
         check (status in (
-            'Discovered', 'Saved', 'Applied', 'OA',
-            'Interview', 'Offer', 'Rejected', 'Withdrawn'
+            'discovered', 'saved', 'applied', 'oa',
+            'interview', 'offer', 'rejected', 'withdrawn'
         )),
+    application_date date,
+    deadline date,
     interview_date date,
+    notes text,
     hours_available_per_day numeric(4, 2),
     created_at timestamptz not null default now(),
     updated_at timestamptz not null default now(),
     unique (user_id, role_id)
 );
+
+-- Safe to re-run against a database created from an earlier version of
+-- this schema: adds application_date/deadline/notes if missing, and
+-- lowercases status values (this schema previously used Title Case
+-- values like 'Discovered').
+alter table applications add column if not exists application_date date;
+alter table applications add column if not exists deadline date;
+alter table applications add column if not exists notes text;
+update applications set status = lower(status) where status <> lower(status);
+alter table applications alter column status set default 'discovered';
+alter table applications drop constraint if exists applications_status_check;
+alter table applications add constraint applications_status_check
+    check (status in (
+        'discovered', 'saved', 'applied', 'oa',
+        'interview', 'offer', 'rejected', 'withdrawn'
+    ));
 
 -- ---------------------------------------------------------------------
 -- assessment_results

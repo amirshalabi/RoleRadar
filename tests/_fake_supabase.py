@@ -1,0 +1,111 @@
+"""
+A minimal in-memory stand-in for the Supabase client, shared by tests
+that need real stateful CRUD sequences (insert then select then update,
+etc.) rather than just recording which calls were made. Not a test
+module itself - no test_ prefix, not collected by pytest.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from types import SimpleNamespace
+from typing import Any
+
+
+class _InMemoryTable:
+    def __init__(self) -> None:
+        self.rows: list[dict[str, Any]] = []
+        self._next_id = 1
+
+
+class _FakeQueryBuilder:
+    def __init__(self, table: _InMemoryTable):
+        self._table = table
+        self._filters: dict[str, Any] = {}
+        self._op: str | None = None
+        self._payload: dict[str, Any] | None = None
+        self._order_key: str | None = None
+        self._order_desc = False
+        self._limit: int | None = None
+
+    def select(self, *_args: Any, **_kwargs: Any) -> "_FakeQueryBuilder":
+        self._op = "select"
+        return self
+
+    def insert(self, payload: dict[str, Any]) -> "_FakeQueryBuilder":
+        self._op = "insert"
+        self._payload = payload
+        return self
+
+    def update(self, payload: dict[str, Any]) -> "_FakeQueryBuilder":
+        self._op = "update"
+        self._payload = payload
+        return self
+
+    def delete(self) -> "_FakeQueryBuilder":
+        self._op = "delete"
+        return self
+
+    def eq(self, key: str, value: Any) -> "_FakeQueryBuilder":
+        self._filters[key] = value
+        return self
+
+    def order(self, key: str, desc: bool = False) -> "_FakeQueryBuilder":
+        self._order_key = key
+        self._order_desc = desc
+        return self
+
+    def limit(self, count: int) -> "_FakeQueryBuilder":
+        self._limit = count
+        return self
+
+    def _matches(self, row: dict[str, Any]) -> bool:
+        return all(row.get(key) == value for key, value in self._filters.items())
+
+    def execute(self) -> SimpleNamespace:
+        if self._op == "select":
+            rows = [row for row in self._table.rows if self._matches(row)]
+            if self._order_key:
+                rows = sorted(rows, key=lambda r: r[self._order_key], reverse=self._order_desc)
+            if self._limit is not None:
+                rows = rows[: self._limit]
+            return SimpleNamespace(data=[dict(row) for row in rows])
+
+        if self._op == "insert":
+            assert self._payload is not None
+            row = dict(self._payload)
+            row.setdefault("id", str(self._table._next_id))
+            # Simulate Postgres's `default now()` for timestamp columns
+            # the real schema always populates, so ordering by
+            # created_at works the same way it would against a real table.
+            now = datetime.now(timezone.utc).isoformat()
+            row.setdefault("created_at", now)
+            row.setdefault("updated_at", now)
+            self._table._next_id += 1
+            self._table.rows.append(row)
+            return SimpleNamespace(data=[dict(row)])
+
+        if self._op == "update":
+            assert self._payload is not None
+            matched = [row for row in self._table.rows if self._matches(row)]
+            for row in matched:
+                row.update(self._payload)
+            return SimpleNamespace(data=[dict(row) for row in matched])
+
+        if self._op == "delete":
+            matched = [row for row in self._table.rows if self._matches(row)]
+            self._table.rows = [row for row in self._table.rows if row not in matched]
+            return SimpleNamespace(data=[dict(row) for row in matched])
+
+        raise AssertionError("no operation (select/insert/update/delete) was called before execute()")
+
+
+class FakeSupabaseClient:
+    """In-memory stand-in for the Supabase client. Each table name gets its own independent row store."""
+
+    def __init__(self) -> None:
+        self._tables: dict[str, _InMemoryTable] = {}
+
+    def table(self, name: str) -> _FakeQueryBuilder:
+        self._tables.setdefault(name, _InMemoryTable())
+        return _FakeQueryBuilder(self._tables[name])

@@ -15,7 +15,7 @@ from typing import Any
 
 import pytest
 
-from backend.db import applications, favorites, roles, upserts
+from backend.db import roles, upserts
 from backend.db.client import SupabaseNotConfiguredError, get_client
 from backend.utils.config import get_settings
 
@@ -145,64 +145,9 @@ def test_upsert_fit_score_keys_on_user_and_role(monkeypatch: pytest.MonkeyPatch)
     assert captured["values"]["role_id"] == "r1"
 
 
-def test_save_favorite_is_idempotent_via_upsert(monkeypatch: pytest.MonkeyPatch) -> None:
-    captured: dict = {}
 
-    def fake_upsert_row(table: str, values: dict, on_conflict: str) -> dict:
-        captured["table"] = table
-        captured["on_conflict"] = on_conflict
-        captured["values"] = values
-        return values
-
-    monkeypatch.setattr(favorites, "upsert_row", fake_upsert_row)
-
-    favorites.save_favorite(user_id="u1", role_id="r1")
-    favorites.save_favorite(user_id="u1", role_id="r1")
-
-    assert captured["table"] == favorites.FAVORITES_TABLE
-    assert captured["on_conflict"] == "user_id,role_id"
-    assert captured["values"] == {"user_id": "u1", "role_id": "r1"}
-
-
-def test_remove_favorite_filters_by_user_and_role(monkeypatch: pytest.MonkeyPatch) -> None:
-    fake_client = FakeSupabaseClient()
-    monkeypatch.setattr(favorites, "get_client", lambda: fake_client)
-
-    favorites.remove_favorite(user_id="u1", role_id="r1")
-
-    assert ("favorites", "delete", (), {}) in fake_client.calls
-    assert ("favorites", "eq", ("user_id", "u1"), {}) in fake_client.calls
-    assert ("favorites", "eq", ("role_id", "r1"), {}) in fake_client.calls
-
-
-def test_list_favorites_returns_data_for_user(monkeypatch: pytest.MonkeyPatch) -> None:
-    fake_client = FakeSupabaseClient(response_data=[{"user_id": "u1", "role_id": "r1"}])
-    monkeypatch.setattr(favorites, "get_client", lambda: fake_client)
-
-    result = favorites.list_favorites(user_id="u1")
-
-    assert result == [{"user_id": "u1", "role_id": "r1"}]
-    assert ("favorites", "eq", ("user_id", "u1"), {}) in fake_client.calls
-
-
-def test_upsert_application_rejects_invalid_status() -> None:
-    with pytest.raises(ValueError):
-        applications.upsert_application(user_id="u1", role_id="r1", status="NotARealStatus")
-
-
-def test_upsert_application_is_idempotent_via_upsert(monkeypatch: pytest.MonkeyPatch) -> None:
-    captured: dict = {}
-
-    def fake_upsert_row(table: str, values: dict, on_conflict: str) -> dict:
-        captured["table"] = table
-        captured["on_conflict"] = on_conflict
-        captured["values"] = values
-        return values
-
-    monkeypatch.setattr(applications, "upsert_row", fake_upsert_row)
-
-    applications.upsert_application(user_id="u1", role_id="r1", status="Applied")
-
-    assert captured["table"] == applications.APPLICATIONS_TABLE
-    assert captured["on_conflict"] == "user_id,role_id"
-    assert captured["values"]["status"] == "Applied"
+# Favorites- and applications-specific behavior now lives in
+# tests/test_favorites.py and tests/test_applications.py, since those
+# modules moved from a blind Postgres upsert to a check-then-insert /
+# update-if-exists pattern (see their module docstrings for why) that
+# doesn't fit this file's "generic upsert_row behavior" scope.
