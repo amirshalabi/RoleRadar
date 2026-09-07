@@ -32,14 +32,17 @@ from pydantic import BaseModel, Field
 
 from backend.candidate.profile import CandidateProfile, CandidateSkillEstimate
 from backend.db import candidates as candidates_db
+from backend.db import rationales as rationales_db
 from backend.db import role_requirements as role_requirements_db
 from backend.db import roles as roles_db
 from backend.ingestion.normalize import Role
 from backend.llm.extract_requirements import RoleRequirement, extract_role_requirements
+from backend.llm.rationale import FitRationale, generate_fit_rationale
 from backend.matching.gaps import SkillGapResult, calculate_skill_gaps
 from backend.matching.scorer import FitScoreResult, calculate_fit_score
 from backend.planning.readiness import ReadinessResult, calculate_readiness
 from backend.services import tracking
+from backend.utils.hashing import hash_json
 
 logger = logging.getLogger(__name__)
 
@@ -265,3 +268,48 @@ def analyze_role(user_id: str, role_row: dict[str, Any]) -> RoleAnalysis:
     readiness = calculate_readiness(profile, role.role_family) if role.role_family else None
 
     return RoleAnalysis(role=role, requirements=requirements, fit_result=fit_result, gaps=gaps, readiness=readiness)
+
+
+def _rationale_inputs_hash(skill_rows: list[dict[str, Any]], requirements: list[RoleRequirement]) -> str:
+    """
+    A stable digest of everything a generated rationale actually depends
+    on: the candidate's skill estimates and the role's requirements.
+    Order-independent (both lists are sorted before hashing) so a
+    same-content re-fetch from Postgres never produces a spurious cache
+    miss just because row order differs.
+    """
+    skills_payload = sorted(
+        (row["normalized_skill_name"], float(row["estimated_level"]), float(row["confidence"]))
+        for row in skill_rows
+    )
+    requirements_payload = sorted(
+        (requirement.normalized_skill, float(requirement.target_level), float(requirement.importance), requirement.required)
+        for requirement in requirements
+    )
+    return hash_json({"skills": skills_payload, "requirements": requirements_payload})
+
+
+def get_or_generate_rationale(user_id: str, role_row: dict[str, Any], analysis: RoleAnalysis) -> FitRationale:
+    """
+    Return the evidence-grounded rationale for an already-analyzed role,
+    reusing a persisted one (backend.db.rationales) whenever the
+    candidate's skills and the role's requirements haven't changed since
+    it was generated. generate_fit_rationale() - the most expensive call
+    in this module, several Qdrant retrievals plus one LLM call - only
+    runs on a genuine cache miss, never on a plain Streamlit rerun of a
+    page that's already showing this role.
+    """
+    role_id = role_row["id"]
+    skill_rows = candidates_db.list_candidate_skills(user_id)
+    inputs_hash = _rationale_inputs_hash(skill_rows, analysis.requirements)
+
+    cached = rationales_db.get_rationale(user_id, role_id)
+    if cached is not None and cached["inputs_hash"] == inputs_hash:
+        return FitRationale.model_validate(cached["rationale"])
+
+    profile = CandidateProfile(skills=_skill_estimates_from_rows(skill_rows))
+    rationale = generate_fit_rationale(
+        profile, analysis.role, analysis.requirements, analysis.fit_result, analysis.gaps, user_id, role_id
+    )
+    rationales_db.upsert_rationale(user_id, role_id, inputs_hash, rationale.model_dump(mode="json"))
+    return rationale

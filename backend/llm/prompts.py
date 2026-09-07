@@ -113,9 +113,10 @@ For each skill you will be given: the candidate's own resume evidence, \
 the role's own requirement evidence (both retrieved from a vector \
 database), and already-computed metrics for that skill (target level, \
 candidate level, importance, required/preferred, satisfaction ratio, \
-confidence). You will also be given general evidence for non-technical \
-dimensions (experience, coursework, domain, interest, constraints) and \
-a short list of ground-truth candidate profile facts.
+confidence). You will also be given candidate-side AND role-side \
+evidence for each of the six fit-score dimensions (technical, \
+experience, coursework, domain, interest, constraints) and a short list \
+of ground-truth candidate profile facts.
 
 Rules:
 - Only make claims directly supported by the evidence given to you. \
@@ -124,17 +125,29 @@ does not appear in the evidence or profile facts provided.
 - If a skill has no candidate evidence, no role evidence, or both, say \
 so explicitly (e.g. "no resume evidence was found for X") and set that \
 skill's `insufficient_evidence` to true - never fabricate evidence to \
-fill the gap.
+fill the gap. Apply the same standard to a dimension with little or no \
+retrieved evidence: say so plainly rather than filling the gap with \
+generic or invented claims.
 - Do not restate or reinterpret any numeric score in your prose - refer \
 to fit qualitatively (e.g. "strong alignment", "a significant gap") \
 since the numbers are reported separately by the system and are not \
 yours to alter.
-- Ground each skill's `assessment` and `risk` only in the evidence given \
-for that specific skill.
+- Ground each skill's `assessment` and `risk`, and each dimension's \
+`rationale`/`strengths`/`weaknesses`/`risks`/`recommended_action`, only \
+in the evidence given for that specific skill or dimension.
 - In each skill entry, set `skill` to EXACTLY the skill identifier given \
-in its "Skill identifier" line below (case-sensitive) - it is used to \
-programmatically match your narrative back to that skill's computed \
-metrics, so it must be copied verbatim.
+in its "Skill identifier" line below (case-sensitive); in each \
+dimension entry, set `dimension` to EXACTLY the dimension identifier \
+given in its "Dimension identifier" line below (case-sensitive) - both \
+are used to programmatically match your narrative back to that skill's \
+or dimension's computed metrics, so they must be copied verbatim.
+- `recommended_action` (per dimension) must be ONE concrete, specific \
+next step - not a restatement of the rationale.
+- `why_this_role` and `why_not_this_role` are each a short (2-4 \
+sentence) paragraph, not a list: the strongest evidence-backed case for \
+and against this being a good role for the candidate to pursue right \
+now. They may reference the same evidence as the per-skill/per-dimension \
+sections but must not introduce new, unsupported claims.
 """
 
 
@@ -145,7 +158,7 @@ def build_rationale_user_prompt(
     component_scores: dict[str, float],
     profile_facts: dict[str, list[str]],
     skill_contexts: list[dict[str, Any]],
-    dimension_evidence: dict[str, list[str]],
+    dimension_contexts: list[dict[str, Any]],
 ) -> str:
     """
     Build the user-turn prompt for rationale generation from
@@ -155,8 +168,9 @@ def build_rationale_user_prompt(
     normalized_skill, target_level, candidate_level, importance,
     required, satisfaction_ratio, confidence, candidate_evidence
     (list[str]), role_evidence (list[str]).
-    `dimension_evidence`: dimension name -> list of general evidence
-    snippets for that dimension.
+    `dimension_contexts`: one dict per fit-score dimension (technical,
+    experience, coursework, domain, interest, constraints), with keys
+    dimension, candidate_evidence (list[str]), role_evidence (list[str]).
     """
     lines = [
         f"Role: {role_title} at {role_company}",
@@ -190,18 +204,28 @@ def build_rationale_user_prompt(
         else:
             lines.append("  Role requirement evidence: none retrieved.")
 
-    lines.append("\n=== General evidence by score dimension ===")
-    for dimension, snippets in dimension_evidence.items():
-        lines.append(f"\n{dimension}:")
-        if snippets:
-            lines.extend(f'  - "{snippet}"' for snippet in snippets)
+    lines.append("\n=== Evidence by fit-score dimension ===")
+    for context in dimension_contexts:
+        lines.append(f"\nDimension: {context['dimension']}")
+        lines.append(f"  Dimension identifier (echo back exactly): {context['dimension']}")
+        if context["candidate_evidence"]:
+            lines.append("  Candidate evidence:")
+            lines.extend(f'    - "{snippet}"' for snippet in context["candidate_evidence"])
         else:
-            lines.append("  none retrieved.")
+            lines.append("  Candidate evidence: none retrieved.")
+        if context["role_evidence"]:
+            lines.append("  Role evidence:")
+            lines.extend(f'    - "{snippet}"' for snippet in context["role_evidence"])
+        else:
+            lines.append("  Role evidence: none retrieved.")
 
     lines.append(
-        "\nWrite the overall explanation, strengths, weaknesses, risks, uncertain "
-        "areas, recommended actions, and one narrative entry per skill listed "
-        "above, following the response schema exactly. Do not produce a list of "
+        "\nWrite: the overall explanation, strengths, weaknesses, risks, "
+        "uncertain areas, and recommended actions (overall); one narrative "
+        "entry per skill listed above; one narrative entry per fit-score "
+        "dimension listed above (rationale, strengths, weaknesses, risks, "
+        "recommended_action); and why_this_role / why_not_this_role - "
+        "following the response schema exactly. Do not produce a list of "
         "missing requirements yourself - that list is computed separately, "
         "directly from the metrics already given to you above."
     )

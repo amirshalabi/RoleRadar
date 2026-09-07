@@ -59,6 +59,10 @@ for favorite in favorites:
         cols[0].markdown(f"**{favorite['title']}** at {favorite['company']}")
         cols[1].markdown(_priority_badge(favorite["priority"]))
 
+        if st.button("🔬 View full analysis", key=f"analysis_{favorite['role_id']}"):
+            st.session_state["selected_role_id"] = favorite["role_id"]
+            st.switch_page("pages/7_Role_Analysis.py")
+
         if is_demo_mode():
             if favorite["notes"]:
                 st.caption(favorite["notes"])

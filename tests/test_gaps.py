@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from backend.candidate.profile import CandidateSkillEstimate
 from backend.llm.extract_requirements import RoleRequirement
-from backend.matching.gaps import calculate_skill_gaps
+from backend.matching.gaps import calculate_skill_gaps, classify_gap_status
 
 
 def _requirement(skill="Python", normalized="python", target=8.0, importance=9.0, required=True) -> RoleRequirement:
@@ -102,3 +102,34 @@ def test_calculate_skill_gaps_preserves_requirement_order() -> None:
     results = calculate_skill_gaps([], requirements)
 
     assert [r.display_skill for r in results] == ["Python", "C++", "Statistics"]
+
+
+# ---------------------------------------------------------------------
+# classify_gap_status
+# ---------------------------------------------------------------------
+
+
+def test_classify_missing_when_no_matching_candidate_skill() -> None:
+    [gap] = calculate_skill_gaps([], [_requirement()])
+    assert classify_gap_status(gap) == "missing"
+
+
+def test_classify_uncertain_when_matched_but_low_confidence() -> None:
+    [gap] = calculate_skill_gaps(
+        [_candidate_skill(level=8.0, confidence=0.1)], [_requirement(target=8.0)]
+    )
+    assert classify_gap_status(gap) == "uncertain"
+
+
+def test_classify_met_when_target_fully_satisfied() -> None:
+    [gap] = calculate_skill_gaps(
+        [_candidate_skill(level=8.0, confidence=0.8)], [_requirement(target=6.0)]
+    )
+    assert classify_gap_status(gap) == "met"
+
+
+def test_classify_partial_when_matched_with_confidence_but_below_target() -> None:
+    [gap] = calculate_skill_gaps(
+        [_candidate_skill(level=3.0, confidence=0.8)], [_requirement(target=8.0)]
+    )
+    assert classify_gap_status(gap) == "partial"

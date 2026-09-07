@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -34,11 +35,19 @@ from backend.matching.scorer import FitScoreResult
 from backend.rag.retrieval import (
     SkillEvidenceBundle,
     retrieve_candidate_evidence,
+    retrieve_role_content,
     retrieve_skill_evidence,
 )
 from backend.rag.vector_store import RetrievedChunk
 
 logger = logging.getLogger(__name__)
+
+# The six backend.matching.scorer.FitScoreComponents dimensions, in
+# display order. "technical" has no entry in _DIMENSION_QUERY_TEMPLATE
+# below because its evidence is the union of the per-skill evidence
+# already gathered for skill_bundles, not a fresh retrieval query - see
+# _technical_dimension_bundle().
+_ALL_DIMENSIONS = ["technical", "experience", "coursework", "domain", "interest", "constraints"]
 
 
 class EvidenceReference(BaseModel):
@@ -70,12 +79,41 @@ class SkillRationale(BaseModel):
     insufficient_evidence: bool = False
 
 
+class DimensionRationale(BaseModel):
+    """
+    Rationale for one of the six FitScoreComponents dimensions
+    (technical, experience, coursework, domain, interest, constraints).
+    `score` and `confidence` are Python-computed - `score` is copied
+    directly from the already-computed FitScoreResult, and `confidence`
+    is either that dimension's own aggregate confidence (technical) or a
+    deterministic function of retrieval-evidence quality (every other
+    dimension, which has no native confidence measure) - the LLM never
+    produces either number, only the narrative fields below.
+    """
+
+    dimension: str
+    score: float
+    rationale: str
+    candidate_evidence: list[str] = Field(default_factory=list)
+    role_evidence: list[str] = Field(default_factory=list)
+    confidence: float = Field(ge=0, le=1)
+    strengths: list[str] = Field(default_factory=list)
+    weaknesses: list[str] = Field(default_factory=list)
+    risks: list[str] = Field(default_factory=list)
+    recommended_action: str
+    insufficient_evidence: bool = False
+
+
 class FitRationale(BaseModel):
     """
     Complete rationale output. `overall_score` is copied verbatim from
     the FitScoreResult passed to generate_fit_rationale() - never
     produced or altered by the LLM - so any consumer can verify it
-    matches the score that was actually computed.
+    matches the score that was actually computed. `biggest_risk` and
+    `highest_impact_action` are likewise Python-derived (the first entry
+    of `risks`/`recommended_actions`, with a fixed fallback string when
+    empty), not separate LLM-authored fields, since "which risk/action is
+    most important" is nothing the LLM was asked to rank independently.
     """
 
     overall_score: float
@@ -88,6 +126,11 @@ class FitRationale(BaseModel):
     recommended_actions: list[str] = Field(default_factory=list)
     evidence_references: list[EvidenceReference] = Field(default_factory=list)
     skill_rationales: list[SkillRationale] = Field(default_factory=list)
+    dimension_rationales: list[DimensionRationale] = Field(default_factory=list)
+    why_this_role: str = ""
+    why_not_this_role: str = ""
+    biggest_risk: str = ""
+    highest_impact_action: str = ""
 
 
 class _LLMSkillNarrative(BaseModel):
@@ -99,6 +142,19 @@ class _LLMSkillNarrative(BaseModel):
     insufficient_evidence: bool = False
 
 
+class _LLMDimensionNarrative(BaseModel):
+    """Internal: the LLM's narrative-only contribution for one fit-score dimension. Carries no score/confidence."""
+
+    dimension: str = Field(
+        description="Must exactly match the dimension identifier given in the prompt for this dimension."
+    )
+    rationale: str
+    strengths: list[str] = Field(default_factory=list)
+    weaknesses: list[str] = Field(default_factory=list)
+    risks: list[str] = Field(default_factory=list)
+    recommended_action: str
+
+
 class _RationaleNarrative(BaseModel):
     """
     Internal: the LLM's complete narrative-only output, before real
@@ -107,7 +163,10 @@ class _RationaleNarrative(BaseModel):
     unmet" is 100% derivable from already-computed SkillGapResult data
     (required=True and raw_gap>0), so generate_fit_rationale() computes
     it directly via _compute_missing_requirements() rather than trusting
-    the LLM to enumerate it correctly.
+    the LLM to enumerate it correctly. Likewise has no
+    biggest_risk/highest_impact_action fields - see FitRationale's
+    docstring for why those are Python-derived from `risks`/
+    `recommended_actions` instead.
     """
 
     overall_explanation: str
@@ -117,6 +176,9 @@ class _RationaleNarrative(BaseModel):
     uncertain_areas: list[str] = Field(default_factory=list)
     recommended_actions: list[str] = Field(default_factory=list)
     skill_narratives: list[_LLMSkillNarrative] = Field(default_factory=list)
+    dimension_narratives: list[_LLMDimensionNarrative] = Field(default_factory=list)
+    why_this_role: str = ""
+    why_not_this_role: str = ""
 
 
 _DIMENSION_QUERY_TEMPLATE = {
@@ -133,7 +195,20 @@ class _GatheredEvidence:
     """Everything retrieved from Qdrant for one rationale, before any LLM call is made."""
 
     skill_bundles: dict[str, SkillEvidenceBundle] = field(default_factory=dict)
-    dimension_chunks: dict[str, list[RetrievedChunk]] = field(default_factory=dict)
+    dimension_bundles: dict[str, SkillEvidenceBundle] = field(default_factory=dict)
+
+
+def _technical_dimension_bundle(skill_bundles: dict[str, SkillEvidenceBundle]) -> SkillEvidenceBundle:
+    """
+    The "technical" dimension's evidence is the union of every skill's
+    already-retrieved evidence - not a fresh Qdrant query, since it
+    would just re-retrieve the same per-skill chunks under a broader
+    query. Built here, at zero extra retrieval cost, from data
+    _retrieve_evidence() already gathered.
+    """
+    candidate_evidence = [chunk for bundle in skill_bundles.values() for chunk in bundle.candidate_evidence]
+    role_evidence = [chunk for bundle in skill_bundles.values() for chunk in bundle.role_evidence]
+    return SkillEvidenceBundle(skill="technical", candidate_evidence=candidate_evidence, role_evidence=role_evidence)
 
 
 def _retrieve_evidence(
@@ -149,16 +224,18 @@ def _retrieve_evidence(
         gap.normalized_skill: retrieve_skill_evidence(user_id, role_id, gap.normalized_skill, top_k=top_k_per_skill)
         for gap in skill_gaps
     }
-    dimension_chunks = {
-        dimension: retrieve_candidate_evidence(
-            template.format(title=role.title, company=role.company),
-            user_id,
-            role_id=role_id,
-            top_k=top_k_per_dimension,
+    dimension_bundles: dict[str, SkillEvidenceBundle] = {}
+    for dimension, template in _DIMENSION_QUERY_TEMPLATE.items():
+        query_text = template.format(title=role.title, company=role.company)
+        dimension_bundles[dimension] = SkillEvidenceBundle(
+            skill=dimension,
+            candidate_evidence=retrieve_candidate_evidence(
+                query_text, user_id, role_id=role_id, top_k=top_k_per_dimension
+            ),
+            role_evidence=retrieve_role_content(query_text, role_id, top_k=top_k_per_dimension),
         )
-        for dimension, template in _DIMENSION_QUERY_TEMPLATE.items()
-    }
-    return _GatheredEvidence(skill_bundles=skill_bundles, dimension_chunks=dimension_chunks)
+    dimension_bundles["technical"] = _technical_dimension_bundle(skill_bundles)
+    return _GatheredEvidence(skill_bundles=skill_bundles, dimension_bundles=dimension_bundles)
 
 
 def _build_skill_contexts(skill_gaps: list[SkillGapResult], skill_bundles: dict[str, SkillEvidenceBundle]) -> list[dict]:
@@ -184,6 +261,22 @@ def _build_skill_contexts(skill_gaps: list[SkillGapResult], skill_bundles: dict[
     return contexts
 
 
+def _build_dimension_contexts(dimension_bundles: dict[str, SkillEvidenceBundle]) -> list[dict[str, Any]]:
+    contexts = []
+    for dimension in _ALL_DIMENSIONS:
+        bundle = dimension_bundles.get(dimension)
+        candidate_chunks = bundle.candidate_evidence if bundle else []
+        role_chunks = bundle.role_evidence if bundle else []
+        contexts.append(
+            {
+                "dimension": dimension,
+                "candidate_evidence": [chunk.payload.get("text", "") for chunk in candidate_chunks],
+                "role_evidence": [chunk.payload.get("text", "") for chunk in role_chunks],
+            }
+        )
+    return contexts
+
+
 def _generate_narrative(
     role: Role,
     profile: CandidateProfile,
@@ -194,10 +287,7 @@ def _generate_narrative(
 ) -> _RationaleNarrative:
     """The only LLM call in this module. Produces narrative text only - never a score."""
     skill_contexts = _build_skill_contexts(skill_gaps, evidence.skill_bundles)
-    dimension_evidence_text = {
-        dimension: [chunk.payload.get("text", "") for chunk in chunks]
-        for dimension, chunks in evidence.dimension_chunks.items()
-    }
+    dimension_contexts = _build_dimension_contexts(evidence.dimension_bundles)
     user_prompt = build_rationale_user_prompt(
         role_title=role.title,
         role_company=role.company,
@@ -209,7 +299,7 @@ def _generate_narrative(
             "programming_languages": profile.programming_languages,
         },
         skill_contexts=skill_contexts,
-        dimension_evidence=dimension_evidence_text,
+        dimension_contexts=dimension_contexts,
     )
     logger.info("Generating fit rationale for role '%s' at '%s'", role.title, role.company)
     return parse_structured(
@@ -254,6 +344,64 @@ def _dedupe_evidence(references: list[EvidenceReference]) -> list[EvidenceRefere
     return deduped
 
 
+def _first_or_fallback(items: list[str], fallback: str) -> str:
+    """The first entry of an LLM-produced list, or a fixed fallback string if the list is empty."""
+    return items[0] if items else fallback
+
+
+def _dimension_confidence(chunks: list[RetrievedChunk]) -> float:
+    """
+    Deterministic confidence for a non-technical dimension: the average
+    Qdrant similarity score across every chunk retrieved for it
+    (candidate-side and role-side combined), or 0.0 if nothing was
+    retrieved. The "technical" dimension does not use this - it has a
+    real aggregate_confidence already computed by
+    backend.matching.scorer.calculate_technical_fit().
+    """
+    if not chunks:
+        return 0.0
+    return round(sum(chunk.score for chunk in chunks) / len(chunks), 4)
+
+
+def _assemble_dimension_rationales(
+    fit_score: FitScoreResult,
+    dimension_bundles: dict[str, SkillEvidenceBundle],
+    narrative_by_dimension: dict[str, _LLMDimensionNarrative],
+) -> list[DimensionRationale]:
+    """Splice each dimension's already-computed score/confidence together with its narrative and evidence."""
+    results: list[DimensionRationale] = []
+    for dimension in _ALL_DIMENSIONS:
+        bundle = dimension_bundles.get(dimension)
+        candidate_chunks = bundle.candidate_evidence if bundle else []
+        role_chunks = bundle.role_evidence if bundle else []
+        llm_entry = narrative_by_dimension.get(dimension)
+        has_evidence = bool(candidate_chunks) or bool(role_chunks)
+
+        if dimension == "technical":
+            confidence = fit_score.technical_detail.aggregate_confidence
+        else:
+            confidence = _dimension_confidence(candidate_chunks + role_chunks)
+
+        results.append(
+            DimensionRationale(
+                dimension=dimension,
+                score=getattr(fit_score.components, dimension),
+                rationale=llm_entry.rationale if llm_entry else "Insufficient evidence to assess this dimension.",
+                candidate_evidence=[chunk.payload.get("text", "") for chunk in candidate_chunks],
+                role_evidence=[chunk.payload.get("text", "") for chunk in role_chunks],
+                confidence=confidence,
+                strengths=llm_entry.strengths if llm_entry else [],
+                weaknesses=llm_entry.weaknesses if llm_entry else [],
+                risks=llm_entry.risks if llm_entry else [],
+                recommended_action=(
+                    llm_entry.recommended_action if llm_entry else "Gather more evidence for this dimension."
+                ),
+                insufficient_evidence=not has_evidence,
+            )
+        )
+    return results
+
+
 def generate_fit_rationale(
     profile: CandidateProfile,
     role: Role,
@@ -269,7 +417,7 @@ def generate_fit_rationale(
 ) -> FitRationale:
     """
     Retrieve grounding evidence from Qdrant for every skill in
-    `skill_gaps` and for each non-technical score dimension (retrieval
+    `skill_gaps` and for each of the six fit-score dimensions (retrieval
     happens entirely inside _retrieve_evidence(), before any LLM call),
     then generate narrative text explaining `fit_score` - which is
     treated as fixed, already-final input, never something the LLM can
@@ -311,8 +459,11 @@ def generate_fit_rationale(
         evidence_references.extend(_to_evidence_reference(chunk) for chunk in candidate_chunks)
         evidence_references.extend(_to_evidence_reference(chunk) for chunk in role_chunks)
 
-    for chunks in evidence.dimension_chunks.values():
-        evidence_references.extend(_to_evidence_reference(chunk) for chunk in chunks)
+    narrative_by_dimension = {entry.dimension: entry for entry in narrative.dimension_narratives}
+    dimension_rationales = _assemble_dimension_rationales(fit_score, evidence.dimension_bundles, narrative_by_dimension)
+    for bundle in evidence.dimension_bundles.values():
+        evidence_references.extend(_to_evidence_reference(chunk) for chunk in bundle.candidate_evidence)
+        evidence_references.extend(_to_evidence_reference(chunk) for chunk in bundle.role_evidence)
 
     return FitRationale(
         overall_score=fit_score.overall_score,
@@ -325,4 +476,12 @@ def generate_fit_rationale(
         recommended_actions=narrative.recommended_actions,
         evidence_references=_dedupe_evidence(evidence_references),
         skill_rationales=skill_rationales,
+        dimension_rationales=dimension_rationales,
+        why_this_role=narrative.why_this_role or "Not enough evidence was retrieved to make a strong case for this role yet.",
+        why_not_this_role=narrative.why_not_this_role
+        or "Not enough evidence was retrieved to identify a strong concern about this role yet.",
+        biggest_risk=_first_or_fallback(narrative.risks, "No significant risk identified from the available evidence."),
+        highest_impact_action=_first_or_fallback(
+            narrative.recommended_actions, "Gather more evidence (resume detail, coursework, projects) before acting."
+        ),
     )

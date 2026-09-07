@@ -150,64 +150,6 @@ st.caption(f"Showing {len(filtered)} of {len(cards)} role(s).")
 
 
 # ---------------------------------------------------------------------
-# Detail dialog
-# ---------------------------------------------------------------------
-
-
-@st.dialog("Role details", width="large")
-def show_role_detail(card: RoleCard) -> None:
-    st.subheader(f"{card.title} at {card.company}")
-    if card.location:
-        st.caption(card.location)
-    if card.description:
-        st.write(card.description)
-
-    if is_demo_mode():
-        st.info("Detailed analysis (extraction + scoring) is disabled in Demo mode - see the Skill Gaps page for a worked example.")
-        return
-
-    if not card.analyzed:
-        st.warning("This role hasn't been analyzed yet - fit score, gaps, and readiness need one extraction pass.")
-        if st.button("🔬 Analyze this role", type="primary"):
-            with st.spinner("Extracting requirements and scoring fit..."):
-                try:
-                    role_row = discovery.get_role(card.role_id)
-                    discovery.analyze_role(user_id, role_row)
-                except ValueError as exc:
-                    st.error(str(exc))
-                    return
-            st.rerun()  # re-open the dialog fresh so it takes the now-analyzed branch below
-        return
-
-    # Re-run analysis is cheap (no LLM call once requirements are
-    # cached - see analyze_role()) so the dialog can always show a
-    # fully up-to-date breakdown against the candidate's current skills.
-    with st.spinner("Loading analysis..."):
-        role_row = discovery.get_role(card.role_id)
-        try:
-            analysis = discovery.analyze_role(user_id, role_row)
-        except ValueError as exc:
-            st.error(str(exc))
-            return
-
-    st.metric("Overall fit", f"{analysis.fit_result.overall_score:.1f} / 100")
-    component_cols = st.columns(6)
-    for col, (name, value) in zip(component_cols, analysis.fit_result.components.model_dump().items()):
-        col.metric(name.title(), f"{value:.0f}")
-
-    if analysis.readiness is not None:
-        st.progress(min(analysis.readiness.overall_readiness / 100, 1.0), text=f"Readiness: {analysis.readiness.overall_readiness:.1f} / 100")
-
-    st.markdown("**Skill gaps**")
-    for gap in sorted(analysis.gaps, key=lambda g: g.weighted_gap, reverse=True):
-        cols = st.columns([2, 1, 1, 1])
-        cols[0].markdown(gap.display_skill + (" *(required)*" if gap.required else ""))
-        cols[1].caption(f"target {gap.target_level:g}")
-        cols[2].caption(f"you: {gap.candidate_level:g}")
-        cols[3].progress(min(gap.satisfaction_ratio, 1.0))
-
-
-# ---------------------------------------------------------------------
 # Cards
 # ---------------------------------------------------------------------
 
@@ -254,5 +196,6 @@ for card in filtered:
             strengths_text = ", ".join(card.top_strengths) if card.top_strengths else "—"
             st.caption(f"✅ Strengths: {strengths_text}" + (f"  ·  ⚠️ Top gap: {card.top_gap}" if card.top_gap else ""))
 
-        if st.button("View details", key=f"detail_{card.role_id}"):
-            show_role_detail(card)
+        if st.button("🔬 View full analysis", key=f"detail_{card.role_id}"):
+            st.session_state["selected_role_id"] = card.role_id
+            st.switch_page("pages/7_Role_Analysis.py")

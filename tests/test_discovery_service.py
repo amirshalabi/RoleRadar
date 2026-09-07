@@ -11,10 +11,12 @@ import pytest
 from backend.db import applications as applications_db
 from backend.db import candidates as candidates_db
 from backend.db import favorites as favorites_db
+from backend.db import rationales as rationales_db
 from backend.db import role_requirements as role_requirements_db
 from backend.db import roles as roles_db
 from backend.db import upserts as upserts_db
 from backend.llm.extract_requirements import RoleRequirement
+from backend.llm.rationale import FitRationale
 from backend.services import discovery
 from tests._fake_supabase import FakeSupabaseClient
 
@@ -27,9 +29,13 @@ SAMPLE_REQUIREMENTS = [
 @pytest.fixture
 def fake_client(monkeypatch: pytest.MonkeyPatch) -> FakeSupabaseClient:
     client = FakeSupabaseClient()
-    for module in (roles_db, candidates_db, favorites_db, applications_db, role_requirements_db, upserts_db):
+    for module in (roles_db, candidates_db, favorites_db, applications_db, role_requirements_db, rationales_db, upserts_db):
         monkeypatch.setattr(module, "get_client", lambda c=client: c)
     return client
+
+
+def _fake_rationale(overall_score: float = 50.0) -> FitRationale:
+    return FitRationale(overall_score=overall_score, overall_explanation="x")
 
 
 def _seed_role(role_family="quant", description="Build trading signals. Need probability and Python."):
@@ -205,3 +211,90 @@ def test_card_reflects_analysis_after_it_runs(monkeypatch: pytest.MonkeyPatch, f
     assert card.fit_score is not None
     assert "Python" in card.top_strengths
     assert card.top_gap == "Probability"
+
+
+# ---------------------------------------------------------------------
+# get_or_generate_rationale
+# ---------------------------------------------------------------------
+
+
+def test_get_or_generate_rationale_calls_llm_and_persists_on_first_run(
+    monkeypatch: pytest.MonkeyPatch, fake_client: FakeSupabaseClient
+) -> None:
+    role_row = _seed_role()
+    monkeypatch.setattr(discovery, "extract_role_requirements", lambda role, model=None: SAMPLE_REQUIREMENTS)
+    analysis = discovery.analyze_role("u1", role_row)
+
+    calls = []
+    monkeypatch.setattr(
+        discovery,
+        "generate_fit_rationale",
+        lambda *a, **kw: (calls.append(1), _fake_rationale(analysis.fit_result.overall_score))[1],
+    )
+
+    rationale = discovery.get_or_generate_rationale("u1", role_row, analysis)
+
+    assert len(calls) == 1
+    assert rationale.overall_score == analysis.fit_result.overall_score
+    assert rationales_db.get_rationale("u1", role_row["id"]) is not None
+
+
+def test_get_or_generate_rationale_reuses_cache_when_inputs_unchanged(
+    monkeypatch: pytest.MonkeyPatch, fake_client: FakeSupabaseClient
+) -> None:
+    role_row = _seed_role()
+    monkeypatch.setattr(discovery, "extract_role_requirements", lambda role, model=None: SAMPLE_REQUIREMENTS)
+    analysis = discovery.analyze_role("u1", role_row)
+
+    calls = []
+    monkeypatch.setattr(
+        discovery, "generate_fit_rationale", lambda *a, **kw: (calls.append(1), _fake_rationale())[1]
+    )
+
+    first = discovery.get_or_generate_rationale("u1", role_row, analysis)
+    second = discovery.get_or_generate_rationale("u1", role_row, analysis)
+
+    assert len(calls) == 1  # the second call was a pure cache read - no LLM/Qdrant call
+    assert first.overall_score == second.overall_score
+
+
+def test_get_or_generate_rationale_regenerates_when_candidate_skills_change(
+    monkeypatch: pytest.MonkeyPatch, fake_client: FakeSupabaseClient
+) -> None:
+    role_row = _seed_role()
+    monkeypatch.setattr(discovery, "extract_role_requirements", lambda role, model=None: SAMPLE_REQUIREMENTS)
+    analysis = discovery.analyze_role("u1", role_row)
+
+    calls = []
+    monkeypatch.setattr(
+        discovery, "generate_fit_rationale", lambda *a, **kw: (calls.append(1), _fake_rationale())[1]
+    )
+
+    discovery.get_or_generate_rationale("u1", role_row, analysis)
+    candidates_db.upsert_candidate_skill("u1", "python", estimated_level=9.0, confidence=0.9, display_name="Python")
+    discovery.get_or_generate_rationale("u1", role_row, analysis)
+
+    assert len(calls) == 2  # candidate skills changed since the cached rationale was generated
+
+
+def test_get_or_generate_rationale_regenerates_when_requirements_change(
+    monkeypatch: pytest.MonkeyPatch, fake_client: FakeSupabaseClient
+) -> None:
+    role_row = _seed_role()
+    monkeypatch.setattr(discovery, "extract_role_requirements", lambda role, model=None: SAMPLE_REQUIREMENTS)
+    analysis = discovery.analyze_role("u1", role_row)
+
+    calls = []
+    monkeypatch.setattr(
+        discovery, "generate_fit_rationale", lambda *a, **kw: (calls.append(1), _fake_rationale())[1]
+    )
+    discovery.get_or_generate_rationale("u1", role_row, analysis)
+
+    role_requirements_db.upsert_role_requirements(
+        role_row["id"],
+        [{"normalized_skill_name": "python", "display_name": "Python", "target_level": 9.0, "importance": 9.0, "is_required": True, "evidence": []}],
+    )
+    changed_analysis = discovery.analyze_role("u1", role_row)
+    discovery.get_or_generate_rationale("u1", role_row, changed_analysis)
+
+    assert len(calls) == 2  # requirement target_level changed since the cached rationale was generated

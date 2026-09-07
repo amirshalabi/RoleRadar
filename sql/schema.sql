@@ -244,6 +244,25 @@ create table if not exists study_tasks (
 );
 
 -- ---------------------------------------------------------------------
+-- role_rationales
+-- Cached LLM-generated fit rationale per (user, role), keyed with a
+-- hash of the inputs (candidate skills + role requirements) it was
+-- generated from. backend.services.discovery reuses this row as-is
+-- whenever the hash still matches, so opening a role's detailed
+-- analysis never re-runs the LLM/Qdrant pipeline unless the candidate's
+-- skills or the role's requirements actually changed since last time.
+-- ---------------------------------------------------------------------
+create table if not exists role_rationales (
+    id uuid primary key default gen_random_uuid(),
+    user_id uuid not null references users(id) on delete cascade,
+    role_id uuid not null references roles(id) on delete cascade,
+    inputs_hash text not null,
+    rationale jsonb not null,
+    generated_at timestamptz not null default now(),
+    unique (user_id, role_id)
+);
+
+-- ---------------------------------------------------------------------
 -- ingestion_runs
 -- One row per ingestion+matching pipeline run, for pipeline metrics and
 -- auditability. Append-only audit log, NOT an idempotent-upsert table
@@ -299,6 +318,7 @@ create index if not exists idx_candidate_skills_user_id on candidate_skills(user
 create index if not exists idx_role_requirements_role_id on role_requirements(role_id);
 create index if not exists idx_fit_scores_user_id on fit_scores(user_id);
 create index if not exists idx_favorites_user_id on favorites(user_id);
+create index if not exists idx_role_rationales_user_id on role_rationales(user_id);
 create index if not exists idx_applications_user_id on applications(user_id);
 create index if not exists idx_applications_status on applications(status);
 create index if not exists idx_study_tasks_study_plan_id on study_tasks(study_plan_id);

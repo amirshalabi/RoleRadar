@@ -95,3 +95,33 @@ def calculate_skill_gaps(
             )
         )
     return results
+
+
+# Below this confidence, a "matched" skill is treated as uncertain rather
+# than a trustworthy partial/full match for display purposes - the
+# candidate claimed it, but the evidence behind that claim is too weak
+# to rely on. Purely a UI-classification threshold (see
+# classify_gap_status()); it does not affect scoring anywhere upstream.
+UNCERTAIN_CONFIDENCE_THRESHOLD = 0.4
+
+
+def classify_gap_status(gap: SkillGapResult) -> str:
+    """
+    Deterministic display status for one skill gap:
+
+    - "missing": no matching candidate skill estimate at all.
+    - "uncertain": matched, but confidence is below
+      UNCERTAIN_CONFIDENCE_THRESHOLD - too weakly evidenced to trust.
+    - "met": candidate fully satisfies the target level.
+    - "partial": matched with reasonable confidence, but below target.
+
+    Pure classification of already-computed SkillGapResult fields - adds
+    no new scoring logic of its own.
+    """
+    if not gap.matched:
+        return "missing"
+    if gap.confidence < UNCERTAIN_CONFIDENCE_THRESHOLD:
+        return "uncertain"
+    if gap.satisfaction_ratio >= 1.0:
+        return "met"
+    return "partial"

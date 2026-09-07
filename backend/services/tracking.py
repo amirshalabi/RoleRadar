@@ -63,6 +63,11 @@ def unsave_role(user_id: str, role_id: str) -> None:
     favorites_db.remove_favorite(user_id, role_id)
 
 
+def get_favorite(user_id: str, role_id: str) -> dict[str, Any] | None:
+    """Fetch a user's favorite row for a single role, or None if it isn't favorited."""
+    return favorites_db.get_favorite(user_id, role_id)
+
+
 def list_saved_roles(user_id: str) -> list[dict[str, Any]]:
     """Return all of a user's favorited roles, most recently saved first."""
     return favorites_db.list_favorites(user_id)
