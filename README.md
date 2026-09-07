@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # RoleRadar
 
 AI-powered opportunity matching and adaptive interview-readiness platform for
@@ -107,3 +108,6 @@ See `backend/`, `pages/`, and `tests/` for the module layout, and
 `backend/db/` and `backend/utils/hashing.py` currently contain only a
 docstring describing their intended responsibility; implementation will
 be added incrementally.
+=======
+# RoleRadar
+>>>>>>> c765b605b59c83f6cd4b1b83a6c27dfff053ee31
