@@ -25,6 +25,8 @@ class Settings(BaseModel):
     """Typed application settings sourced from environment variables."""
 
     openai_api_key: str | None = None
+    openai_model: str = "gpt-4o-mini"
+    openai_embedding_model: str = "text-embedding-3-small"
     supabase_url: str | None = None
     supabase_key: str | None = None
     qdrant_url: str | None = None
@@ -37,6 +39,8 @@ def get_settings() -> Settings:
     """Return cached application settings loaded from the environment."""
     return Settings(
         openai_api_key=os.getenv("OPENAI_API_KEY"),
+        openai_model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+        openai_embedding_model=os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small"),
         supabase_url=os.getenv("SUPABASE_URL"),
         supabase_key=os.getenv("SUPABASE_KEY"),
         qdrant_url=os.getenv("QDRANT_URL"),
