@@ -239,7 +239,11 @@ create table if not exists study_tasks (
 
 -- ---------------------------------------------------------------------
 -- ingestion_runs
--- One row per ingestion batch, for pipeline metrics and auditability.
+-- One row per ingestion+matching pipeline run, for pipeline metrics and
+-- auditability. Append-only audit log, NOT an idempotent-upsert table
+-- like roles/favorites/applications - every run is a genuinely new
+-- event, so backend/db/metrics.py inserts a fresh row per call rather
+-- than upserting against some "same run" identity (there isn't one).
 -- ---------------------------------------------------------------------
 create table if not exists ingestion_runs (
     id uuid primary key default gen_random_uuid(),
@@ -249,12 +253,26 @@ create table if not exists ingestion_runs (
     jobs_ingested integer not null default 0,
     jobs_deduplicated integer not null default 0,
     jobs_eliminated_hard_filter integer not null default 0,
+    jobs_eliminated_keyword_filter integer not null default 0,
     jobs_eliminated_semantic integer not null default 0,
     jobs_reaching_llm integer not null default 0,
     estimated_llm_calls_avoided integer not null default 0,
     serial_ingestion_seconds numeric(10, 3),
-    concurrent_ingestion_seconds numeric(10, 3)
+    concurrent_ingestion_seconds numeric(10, 3),
+    llm_prompt_tokens integer,
+    llm_completion_tokens integer,
+    llm_total_tokens integer,
+    llm_estimated_cost_usd numeric(12, 6)
 );
+
+-- Safe to re-run against a database created from an earlier version of
+-- this schema, before the keyword-filter stage (backend.matching.filters)
+-- and LLM token/cost tracking (backend.utils.metrics) existed.
+alter table ingestion_runs add column if not exists jobs_eliminated_keyword_filter integer not null default 0;
+alter table ingestion_runs add column if not exists llm_prompt_tokens integer;
+alter table ingestion_runs add column if not exists llm_completion_tokens integer;
+alter table ingestion_runs add column if not exists llm_total_tokens integer;
+alter table ingestion_runs add column if not exists llm_estimated_cost_usd numeric(12, 6);
 
 -- ---------------------------------------------------------------------
 -- pipeline_metrics

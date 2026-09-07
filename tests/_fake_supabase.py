@@ -23,7 +23,7 @@ class _FakeQueryBuilder:
         self._table = table
         self._filters: dict[str, Any] = {}
         self._op: str | None = None
-        self._payload: dict[str, Any] | None = None
+        self._payload: dict[str, Any] | list[dict[str, Any]] | None = None
         self._order_key: str | None = None
         self._order_desc = False
         self._limit: int | None = None
@@ -32,7 +32,7 @@ class _FakeQueryBuilder:
         self._op = "select"
         return self
 
-    def insert(self, payload: dict[str, Any]) -> "_FakeQueryBuilder":
+    def insert(self, payload: dict[str, Any] | list[dict[str, Any]]) -> "_FakeQueryBuilder":
         self._op = "insert"
         self._payload = payload
         return self
@@ -73,17 +73,26 @@ class _FakeQueryBuilder:
 
         if self._op == "insert":
             assert self._payload is not None
-            row = dict(self._payload)
-            row.setdefault("id", str(self._table._next_id))
-            # Simulate Postgres's `default now()` for timestamp columns
-            # the real schema always populates, so ordering by
-            # created_at works the same way it would against a real table.
+            # Supabase's insert() accepts either one row (a dict) or a
+            # batch of rows (a list of dicts) - support both, the same
+            # way record_ingestion_run() batch-inserts pipeline_metrics
+            # rows in one call.
+            payloads = self._payload if isinstance(self._payload, list) else [self._payload]
+            inserted_rows: list[dict[str, Any]] = []
             now = datetime.now(timezone.utc).isoformat()
-            row.setdefault("created_at", now)
-            row.setdefault("updated_at", now)
-            self._table._next_id += 1
-            self._table.rows.append(row)
-            return SimpleNamespace(data=[dict(row)])
+            for payload in payloads:
+                row = dict(payload)
+                row.setdefault("id", str(self._table._next_id))
+                # Simulate Postgres's `default now()` for timestamp
+                # columns the real schema always populates, so ordering
+                # by created_at works the same way it would against a
+                # real table.
+                row.setdefault("created_at", now)
+                row.setdefault("updated_at", now)
+                self._table._next_id += 1
+                self._table.rows.append(row)
+                inserted_rows.append(dict(row))
+            return SimpleNamespace(data=inserted_rows)
 
         if self._op == "update":
             assert self._payload is not None
