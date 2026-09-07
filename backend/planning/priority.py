@@ -80,12 +80,27 @@ class PrepItem(BaseModel):
 
 
 def _build_alias_to_topic_index(topic_weights: dict[str, float]) -> dict[str, str]:
-    """normalized alias skill name -> topic name, for every topic this role family weights."""
+    """
+    normalized alias skill name -> topic name, for every topic this role
+    family weights.
+
+    Built in two passes so a topic's OWN name always wins as its own
+    match, even though another topic may list it as a weaker borrowed
+    alias (e.g. readiness.TOPIC_SKILL_ALIASES lists "probability" under
+    BOTH the "probability" topic itself AND "game_ev_reasoning", since
+    probability skill evidence is weak-but-real signal for EV reasoning
+    too). Without this two-pass ordering, whichever topic happened to
+    be processed last in `topic_weights` would silently steal an exact
+    self-name match from its rightful topic.
+    """
     index: dict[str, str] = {}
     for topic in topic_weights:
+        index[normalize_skill_name(topic)] = topic
+    for topic in topic_weights:
         for alias in TOPIC_SKILL_ALIASES.get(topic, ()):
-            index[normalize_skill_name(alias)] = topic
-        index[normalize_skill_name(topic)] = topic  # a topic is always its own alias
+            normalized_alias = normalize_skill_name(alias)
+            if normalized_alias not in index:
+                index[normalized_alias] = topic
     return index
 
 
