@@ -1,0 +1,13 @@
+streamlit
+fastapi
+uvicorn
+openai
+supabase
+qdrant-client
+pydantic
+python-dotenv
+pandas
+httpx
+pymupdf
+plotly
+pytest
