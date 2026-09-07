@@ -27,6 +27,7 @@ class _FakeQueryBuilder:
         self._order_key: str | None = None
         self._order_desc = False
         self._limit: int | None = None
+        self._on_conflict: str | None = None
 
     def select(self, *_args: Any, **_kwargs: Any) -> "_FakeQueryBuilder":
         self._op = "select"
@@ -35,6 +36,12 @@ class _FakeQueryBuilder:
     def insert(self, payload: dict[str, Any] | list[dict[str, Any]]) -> "_FakeQueryBuilder":
         self._op = "insert"
         self._payload = payload
+        return self
+
+    def upsert(self, payload: dict[str, Any] | list[dict[str, Any]], on_conflict: str = "id", **_kwargs: Any) -> "_FakeQueryBuilder":
+        self._op = "upsert"
+        self._payload = payload
+        self._on_conflict = on_conflict
         return self
 
     def update(self, payload: dict[str, Any]) -> "_FakeQueryBuilder":
@@ -94,6 +101,39 @@ class _FakeQueryBuilder:
                 inserted_rows.append(dict(row))
             return SimpleNamespace(data=inserted_rows)
 
+        if self._op == "upsert":
+            assert self._payload is not None
+            # Mimics Postgres's ON CONFLICT (<on_conflict columns>) DO
+            # UPDATE: a row matching every conflict column gets updated
+            # in place; otherwise a new row is inserted. Supports both a
+            # single dict and a batch (list of dicts), same as insert().
+            conflict_columns = [c.strip() for c in (self._on_conflict or "id").split(",")]
+            payloads = self._payload if isinstance(self._payload, list) else [self._payload]
+            now = datetime.now(timezone.utc).isoformat()
+            result_rows: list[dict[str, Any]] = []
+            for payload in payloads:
+                existing = next(
+                    (
+                        row
+                        for row in self._table.rows
+                        if all(row.get(col) == payload.get(col) for col in conflict_columns)
+                    ),
+                    None,
+                )
+                if existing is not None:
+                    existing.update(payload)
+                    existing["updated_at"] = now
+                    result_rows.append(dict(existing))
+                else:
+                    row = dict(payload)
+                    row.setdefault("id", str(self._table._next_id))
+                    row.setdefault("created_at", now)
+                    row.setdefault("updated_at", now)
+                    self._table._next_id += 1
+                    self._table.rows.append(row)
+                    result_rows.append(dict(row))
+            return SimpleNamespace(data=result_rows)
+
         if self._op == "update":
             assert self._payload is not None
             matched = [row for row in self._table.rows if self._matches(row)]
@@ -106,7 +146,7 @@ class _FakeQueryBuilder:
             self._table.rows = [row for row in self._table.rows if row not in matched]
             return SimpleNamespace(data=[dict(row) for row in matched])
 
-        raise AssertionError("no operation (select/insert/update/delete) was called before execute()")
+        raise AssertionError("no operation (select/insert/upsert/update/delete) was called before execute()")
 
 
 class FakeSupabaseClient:

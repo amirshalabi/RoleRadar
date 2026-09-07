@@ -96,9 +96,15 @@ create table if not exists role_requirements (
     target_level numeric(4, 2) not null default 0,
     importance numeric(4, 2) not null default 1,
     is_required boolean not null default true,
+    evidence jsonb not null default '[]'::jsonb,
     created_at timestamptz not null default now(),
     unique (role_id, normalized_skill_name)
 );
+
+-- Safe to re-run against a database created from an earlier version of
+-- this schema, before requirement evidence was persisted
+-- (backend.llm.extract_requirements.RoleRequirement.evidence).
+alter table role_requirements add column if not exists evidence jsonb not null default '[]'::jsonb;
 
 -- ---------------------------------------------------------------------
 -- fit_scores

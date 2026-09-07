@@ -73,6 +73,13 @@ def get_role_by_external_id(external_id: str) -> dict[str, Any] | None:
     return response.data[0] if response.data else None
 
 
+def get_role_by_id(role_id: str) -> dict[str, Any] | None:
+    """Fetch a role by its internal id (the roles.id primary key, not external_id), or None if it doesn't exist."""
+    client = get_client()
+    response = client.table(ROLES_TABLE).select("*").eq("id", role_id).limit(1).execute()
+    return response.data[0] if response.data else None
+
+
 def list_roles(limit: int = 50) -> list[dict[str, Any]]:
     """Most recently seen roles first - for a Discover page's browse list."""
     client = get_client()
