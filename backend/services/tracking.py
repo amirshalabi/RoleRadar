@@ -68,6 +68,11 @@ def list_saved_roles(user_id: str) -> list[dict[str, Any]]:
     return favorites_db.list_favorites(user_id)
 
 
+def list_saved_roles_with_details(user_id: str) -> list[dict[str, Any]]:
+    """Same as list_saved_roles(), with each role's title/company/etc embedded - for display pages."""
+    return favorites_db.list_favorites_with_roles(user_id)
+
+
 def set_role_priority(user_id: str, role_id: str, priority: str) -> dict[str, Any]:
     """Update the priority (dream/high/interested/backup) of an already-saved role."""
     return favorites_db.update_favorite_priority(user_id, role_id, priority)
@@ -86,6 +91,11 @@ def get_application_status(user_id: str, role_id: str) -> dict[str, Any] | None:
 def list_applications(user_id: str) -> list[dict[str, Any]]:
     """Return every application-tracking row for a user, across every stage."""
     return applications_db.list_applications(user_id)
+
+
+def list_applications_with_details(user_id: str) -> list[dict[str, Any]]:
+    """Same as list_applications(), with each row's role title/company/etc embedded - for display pages."""
+    return applications_db.list_applications_with_roles(user_id)
 
 
 def update_application_stage(

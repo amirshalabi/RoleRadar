@@ -128,3 +128,18 @@ def list_applications(user_id: str) -> list[dict[str, Any]]:
     client = get_client()
     response = client.table(APPLICATIONS_TABLE).select("*").eq("user_id", user_id).execute()
     return response.data or []
+
+
+def list_applications_with_roles(user_id: str) -> list[dict[str, Any]]:
+    """
+    Every application row for a user, with its role's title/company/etc
+    embedded (a Postgrest foreign-table select) - what dashboard/list
+    views need without a second query per row. Additive alongside
+    list_applications(), which stays a plain flat select so its existing
+    callers are unaffected.
+    """
+    client = get_client()
+    response = (
+        client.table(APPLICATIONS_TABLE).select("*, roles(*)").eq("user_id", user_id).execute()
+    )
+    return response.data or []

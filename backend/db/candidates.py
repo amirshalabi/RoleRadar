@@ -45,6 +45,15 @@ def upsert_candidate_profile(
     return upsert_row(CANDIDATE_PROFILES_TABLE, values, on_conflict="user_id")
 
 
+def get_candidate_profile(user_id: str) -> dict[str, Any] | None:
+    """Fetch a candidate's profile row, or None if they haven't uploaded a resume yet."""
+    client = get_client()
+    response = (
+        client.table(CANDIDATE_PROFILES_TABLE).select("*").eq("user_id", user_id).limit(1).execute()
+    )
+    return response.data[0] if response.data else None
+
+
 def upsert_candidate_skill(
     user_id: str,
     normalized_skill_name: str,
