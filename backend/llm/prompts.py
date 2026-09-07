@@ -206,3 +206,51 @@ def build_rationale_user_prompt(
         "directly from the metrics already given to you above."
     )
     return "\n".join(lines)
+
+
+STUDY_ACTIVITY_SYSTEM_PROMPT = """\
+You are turning one FIXED interview-prep study block into a concrete, \
+practical activity breakdown. The topic, date, and total minutes for \
+this block have ALREADY been decided by deterministic scheduling code - \
+you may NOT change the topic or the total time. Your only job is to \
+propose 2-4 specific activities that fill the block, each with its own \
+description and a number of minutes, that together add up to \
+approximately the given total (the system will correct the exact total \
+afterward if your numbers are off, but try to make them add up).
+
+Rules:
+- Descriptions must be practical, generic technical-interview-prep \
+activities appropriate to the topic (e.g. "conditional probability \
+review", "expected value practice problems", "review past mistakes"), \
+written the way a student would recognize from real interview prep \
+resources.
+- NEVER invent or imply a specific proprietary interview question, and \
+NEVER claim a specific company asks about a specific topic - if no \
+company-specific evidence is given to you, write general,
+topic-appropriate prep activities only, with no company-specific claims.
+- If you are given the candidate's current level vs. the target level \
+for this topic, use it to calibrate difficulty (a large gap deserves \
+more foundational review; a small gap deserves more applied practice), \
+but do not restate those numbers in your prose.
+- Keep each description short and actionable (under ~10 words).
+"""
+
+
+def build_study_activity_user_prompt(
+    topic: str,
+    allocated_minutes: float,
+    role_title: str,
+    role_company: str,
+    skill_context: str | None = None,
+) -> str:
+    """Build the user-turn prompt for breaking one fixed study block into concrete activities."""
+    lines = [
+        f"Role: {role_title} at {role_company}",
+        f"Topic: {topic}",
+        f"Total time for this block: {allocated_minutes:g} minutes",
+        f"Known context: {skill_context}"
+        if skill_context
+        else "No specific skill-gap data is available for this topic beyond its name.",
+        "\nPropose 2-4 activities for this block, following the response schema exactly.",
+    ]
+    return "\n".join(lines)
