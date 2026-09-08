@@ -53,3 +53,38 @@ def test_extract_text_from_pdf_accepts_str_path(tmp_path) -> None:
 def test_extract_text_from_pdf_rejects_unsupported_type() -> None:
     with pytest.raises(TypeError):
         extract_text_from_pdf(12345)  # type: ignore[arg-type]
+
+
+def test_extract_text_from_pdf_empty_page_returns_empty_string() -> None:
+    """A PDF with a page but no inserted text - not a crash, just an empty result for the caller to handle."""
+    document = pymupdf.open()
+    document.new_page()
+    data = document.tobytes()
+    document.close()
+
+    result = extract_text_from_pdf(data)
+
+    assert result == ""
+
+
+def test_extract_text_from_pdf_malformed_bytes_raises() -> None:
+    """Not a real PDF at all - PyMuPDF should raise, not silently return garbage or an empty string."""
+    with pytest.raises(Exception):  # noqa: B017 - the exact PyMuPDF exception type is an implementation detail
+        extract_text_from_pdf(b"this is not a pdf file at all, just plain bytes")
+
+
+def test_extract_text_from_pdf_extremely_long_document_does_not_truncate() -> None:
+    """A resume-length outlier (many pages) is extracted in full, not silently cut off at some page limit."""
+    document = pymupdf.open()
+    page_count = 50
+    for i in range(page_count):
+        page = document.new_page()
+        page.insert_text((72, 72), f"PAGE_MARKER_{i}")
+    data = document.tobytes()
+    document.close()
+
+    result = extract_text_from_pdf(data)
+
+    assert result.count("PAGE_MARKER_") == page_count
+    assert "PAGE_MARKER_0" in result
+    assert f"PAGE_MARKER_{page_count - 1}" in result

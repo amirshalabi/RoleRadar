@@ -265,6 +265,20 @@ def test_very_short_timeline_still_produces_a_valid_plan() -> None:
     assert sum(t.allocated_minutes for t in plan.tasks) <= plan.total_available_minutes + 1e-6
 
 
+def test_exactly_15_minutes_available_still_produces_a_valid_plan() -> None:
+    """A single tiny prep window (0.25h/day for 1 day = 15 minutes) - the smallest realistic non-zero budget."""
+    gaps = calculate_skill_gaps([], [_requirement(target=8.0, importance=8.0)])
+
+    plan = generate_study_plan(
+        gaps, interview_date=date(2026, 9, 8), current_date=CURRENT, hours_available_per_day=0.25
+    )
+
+    assert plan.scheduling_days == 1
+    assert plan.total_available_minutes == pytest.approx(15.0)
+    assert sum(t.allocated_minutes for t in plan.tasks) <= plan.total_available_minutes + 1e-6
+    assert plan.tasks  # 15 minutes is still enough to schedule something, not silently dropped
+
+
 def test_no_interview_date_produces_zero_minute_plan_with_note() -> None:
     plan = generate_study_plan(
         _gaps_with_one_requirement(), interview_date=None, current_date=CURRENT, hours_available_per_day=3.0

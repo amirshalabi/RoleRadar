@@ -49,6 +49,22 @@ def test_chunk_text_reconstructs_all_words() -> None:
     assert set(words) <= seen_words
 
 
+def test_chunk_text_extremely_long_resume_does_not_hang_or_drop_content() -> None:
+    """A resume-length outlier (~50,000 chars) at the module's real default chunk size - must terminate and preserve every word, not just short synthetic inputs."""
+    words = [f"word{i}" for i in range(8000)]
+    text = " ".join(words)  # comfortably over 50,000 characters
+
+    chunks = chunk_text(text)  # default max_chars/overlap_chars, exercising the real production sizing
+
+    assert len(chunks) > 1
+    for chunk in chunks:
+        assert len(chunk) <= 800  # DEFAULT_CHUNK_SIZE_CHARS
+    seen_words: set[str] = set()
+    for chunk in chunks:
+        seen_words.update(chunk.split())
+    assert set(words) <= seen_words
+
+
 def test_chunk_candidate_evidence_labels_skills_with_normalized_name() -> None:
     profile = CandidateProfile(
         skills=[

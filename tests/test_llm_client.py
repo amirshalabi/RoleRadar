@@ -75,11 +75,35 @@ def test_parse_structured_raises_on_refusal(monkeypatch: pytest.MonkeyPatch) -> 
 
 
 def test_parse_structured_raises_when_parsed_is_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Covers an unparseable/invalid-JSON response from the model - the SDK surfaces this as parsed=None, not a raw JSON error."""
     message = SimpleNamespace(parsed=None, refusal=None)
     completion = SimpleNamespace(choices=[SimpleNamespace(message=message)])
     monkeypatch.setattr(llm_client, "get_openai_client", lambda: _fake_client_returning(completion))
 
     with pytest.raises(llm_client.LLMExtractionError):
+        llm_client.parse_structured("system", "user", _DummyModel)
+
+
+def test_parse_structured_propagates_api_timeout_without_swallowing_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    """
+    KNOWN LIMITATION (documented, not fixed here - see the audit report):
+    this module has no explicit timeout/retry handling of its own. A
+    timeout from the underlying OpenAI SDK call must propagate as-is
+    rather than being silently swallowed or misreported as a different
+    error - this test pins down that current, honest behavior so a
+    future retry/backoff layer can be added deliberately, not by
+    accident.
+    """
+    import httpx
+    import openai
+
+    def _raise_timeout(**kwargs):
+        raise openai.APITimeoutError(request=httpx.Request("POST", "https://api.openai.com/v1/chat/completions"))
+
+    fake_client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(parse=_raise_timeout)))
+    monkeypatch.setattr(llm_client, "get_openai_client", lambda: fake_client)
+
+    with pytest.raises(openai.APITimeoutError):
         llm_client.parse_structured("system", "user", _DummyModel)
 
 

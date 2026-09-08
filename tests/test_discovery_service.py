@@ -130,6 +130,19 @@ def test_analyze_role_extracts_requirements_when_none_persisted(monkeypatch: pyt
     assert role_requirements_db.list_role_requirements(role_row["id"])  # persisted
 
 
+def test_analyze_role_handles_zero_extracted_requirements(monkeypatch: pytest.MonkeyPatch, fake_client: FakeSupabaseClient) -> None:
+    """The LLM legitimately finds nothing extractable in a posting - analyze_role must still produce a valid, in-bounds analysis, not crash."""
+    role_row = _seed_role()
+    monkeypatch.setattr(discovery, "extract_role_requirements", lambda role, model=None: [])
+
+    analysis = discovery.analyze_role("u1", role_row)
+
+    assert analysis.requirements == []
+    assert analysis.gaps == []
+    assert 0.0 <= analysis.fit_result.overall_score <= 100.0
+    assert role_requirements_db.list_role_requirements(role_row["id"]) == []
+
+
 def test_analyze_role_reuses_persisted_requirements_without_calling_llm(monkeypatch: pytest.MonkeyPatch, fake_client: FakeSupabaseClient) -> None:
     role_row = _seed_role()
     role_requirements_db.upsert_role_requirements(
@@ -197,6 +210,45 @@ def test_analyze_role_raises_without_description_or_cached_requirements(fake_cli
 
     with pytest.raises(ValueError):
         discovery.analyze_role("u1", role_row)
+
+
+def test_analyze_role_raises_with_empty_string_description(fake_client: FakeSupabaseClient) -> None:
+    """An empty string is as "no description" as None is - both must hit the same guard, not slip through as truthy."""
+    role_row = _seed_role(description="")
+
+    with pytest.raises(ValueError):
+        discovery.analyze_role("u1", role_row)
+
+
+def test_repeated_scoring_does_not_duplicate_fit_score_row(
+    monkeypatch: pytest.MonkeyPatch, fake_client: FakeSupabaseClient
+) -> None:
+    """Calling analyze_role() for the same (user, role) repeatedly must update the one fit_scores row, never insert additional rows."""
+    role_row = _seed_role()
+    monkeypatch.setattr(discovery, "extract_role_requirements", lambda role, model=None: SAMPLE_REQUIREMENTS)
+
+    discovery.analyze_role("u1", role_row)
+    discovery.analyze_role("u1", role_row)
+    discovery.analyze_role("u1", role_row)
+
+    fit_rows = roles_db.list_fit_scores_for_user("u1", limit=50)
+    assert len(fit_rows) == 1
+
+
+def test_repeated_scoring_reflects_updated_candidate_skills(
+    monkeypatch: pytest.MonkeyPatch, fake_client: FakeSupabaseClient
+) -> None:
+    """Re-scoring after a skill estimate changes must produce a different score, not a stale cached one."""
+    role_row = _seed_role()
+    monkeypatch.setattr(discovery, "extract_role_requirements", lambda role, model=None: SAMPLE_REQUIREMENTS)
+
+    candidates_db.upsert_candidate_skill("u1", "python", estimated_level=1.0, confidence=0.2, display_name="Python")
+    first = discovery.analyze_role("u1", role_row)
+
+    candidates_db.upsert_candidate_skill("u1", "python", estimated_level=9.0, confidence=0.9, display_name="Python")
+    second = discovery.analyze_role("u1", role_row)
+
+    assert second.fit_result.overall_score > first.fit_result.overall_score
 
 
 def test_card_reflects_analysis_after_it_runs(monkeypatch: pytest.MonkeyPatch, fake_client: FakeSupabaseClient) -> None:

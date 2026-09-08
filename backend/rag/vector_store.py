@@ -29,6 +29,12 @@ QdrantNotConfiguredError - not a crash - when they're missing, so
 callers (and tests) can handle a not-yet-configured vector store
 explicitly, the same way backend.db.client.get_client() and
 backend.llm.client.get_openai_client() do for their services.
+
+Querying a collection that has never been written to (e.g. retrieval
+for a brand-new user with no resume evidence indexed yet) is treated as
+"no results," not an error: retrieve_top_k()/retrieve_filtered() catch
+Qdrant's 404 for a missing collection and return [] - a caller should
+never need to call ensure_collection() defensively before a read.
 """
 
 from __future__ import annotations
@@ -40,6 +46,7 @@ from typing import Any
 
 from pydantic import BaseModel
 from qdrant_client import QdrantClient
+from qdrant_client.http.exceptions import UnexpectedResponse
 from qdrant_client.models import Distance, FieldCondition, Filter, MatchValue, PointStruct, VectorParams
 
 from backend.rag.chunking import EvidenceChunk
@@ -167,13 +174,25 @@ def _query(
     client = get_qdrant_client()
     query_vector = provider.embed_one(query_text)
     query_filter = _build_filter(metadata_filter) if metadata_filter else None
-    response = client.query_points(
-        collection_name=collection_name,
-        query=query_vector,
-        query_filter=query_filter,
-        limit=top_k,
-        with_payload=True,
-    )
+    try:
+        response = client.query_points(
+            collection_name=collection_name,
+            query=query_vector,
+            query_filter=query_filter,
+            limit=top_k,
+            with_payload=True,
+        )
+    except UnexpectedResponse as exc:
+        if exc.status_code == 404:
+            # Nothing has ever been indexed into this collection yet
+            # (e.g. a brand-new user with no resume evidence indexed, or
+            # a role that has never been through rationale generation) -
+            # equivalent to "no results found," not an error worth
+            # surfacing to the caller. upsert_chunks() creates the
+            # collection on first write, so this is expected pre-write.
+            logger.info("Qdrant collection '%s' does not exist yet - returning no results", collection_name)
+            return []
+        raise
     return [
         RetrievedChunk(id=str(point.id), score=point.score, payload=point.payload or {})
         for point in response.points

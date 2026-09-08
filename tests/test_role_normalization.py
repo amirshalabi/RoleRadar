@@ -109,3 +109,41 @@ def test_normalize_role_treats_blank_strings_as_absent() -> None:
     role = normalize_role(raw)
 
     assert role.location is None
+
+
+def test_normalize_role_missing_location_key_defaults_to_none() -> None:
+    role = normalize_role({"title": "SWE", "company": "Acme"})
+
+    assert role.location is None
+    # A missing location must not block persistence downstream - the
+    # role should still normalize fully and get a stable external_id.
+    assert role.external_id == generate_role_external_id("Acme", "SWE", None, None)
+
+
+def test_normalize_role_missing_url_key_defaults_to_none() -> None:
+    role = normalize_role({"title": "SWE", "company": "Acme", "location": "Remote"})
+
+    assert role.url is None
+
+
+def test_normalize_role_missing_description_key_defaults_to_none() -> None:
+    role = normalize_role({"title": "SWE", "company": "Acme"})
+
+    assert role.description is None
+
+
+def test_normalize_role_empty_description_string_treated_as_absent() -> None:
+    role = normalize_role({"title": "SWE", "company": "Acme", "description": ""})
+
+    assert role.description is None
+
+
+def test_normalize_role_missing_location_and_url_and_description_together() -> None:
+    """The realistic worst case: a posting that supplies only title/company - everything else optional is absent."""
+    role = normalize_role({"title": "SWE Intern", "company": "Acme Corp"})
+
+    assert role.location is None
+    assert role.url is None
+    assert role.description is None
+    assert role.role_family is None
+    assert role.external_id  # still deterministically derived, never empty/None

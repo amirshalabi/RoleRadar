@@ -161,6 +161,62 @@ def test_technical_fit_optional_skill_mismatch_only_partially_hurts_score() -> N
     assert 0.0 < result.score < 100.0
 
 
+def test_technical_fit_no_skill_overlap_at_all_scores_zero() -> None:
+    """Candidate's claimed skills and the role's requirements share nothing in common - the realistic 'wrong candidate' case."""
+    requirements = [
+        _requirement(skill="Python", normalized="python", target=7.0, importance=8.0, required=True),
+        _requirement(skill="Probability", normalized="probability", target=6.0, importance=7.0, required=True),
+    ]
+    candidate_skills = [
+        _candidate_skill(name="photoshop", display="Photoshop", level=9.0, confidence=0.9),
+        _candidate_skill(name="figma", display="Figma", level=8.0, confidence=0.8),
+    ]
+
+    result = calculate_technical_fit(candidate_skills, requirements)
+
+    assert result.score == 0.0
+    assert all(not gap.matched for gap in result.gaps)
+    overall = calculate_fit_score(CandidateProfile(skills=candidate_skills), _role(), requirements)
+    assert 0.0 <= overall.overall_score <= 100.0
+
+
+def test_technical_fit_optional_requirements_only_all_unmet() -> None:
+    """Every requirement is optional and none are met - should score low, but the required-multiplier never kicks in since nothing here is required."""
+    requirements = [
+        _requirement(skill="Rust", normalized="rust", target=6.0, importance=7.0, required=False),
+        _requirement(skill="Go", normalized="go", target=5.0, importance=5.0, required=False),
+    ]
+
+    result = calculate_technical_fit([], requirements)
+
+    assert result.score == 0.0  # 0% of the (unweighted-by-multiplier) target met either way
+
+
+def test_technical_fit_optional_requirements_only_all_met() -> None:
+    requirements = [
+        _requirement(skill="Rust", normalized="rust", target=6.0, importance=7.0, required=False),
+        _requirement(skill="Go", normalized="go", target=5.0, importance=5.0, required=False),
+    ]
+    candidate_skills = [
+        _candidate_skill(name="rust", level=7.0, confidence=0.7),
+        _candidate_skill(name="go", level=6.0, confidence=0.6),
+    ]
+
+    result = calculate_technical_fit(candidate_skills, requirements)
+
+    assert result.score == 100.0
+
+
+def test_technical_fit_very_low_confidence_skills_still_score_on_level_alone() -> None:
+    """Confidence is deliberately NOT folded into the score (see calculate_technical_fit's docstring) - only aggregate_confidence should reflect it."""
+    requirements = [_requirement(skill="Python", normalized="python", target=7.0, importance=8.0, required=True)]
+    high_confidence = calculate_technical_fit([_candidate_skill(name="python", level=7.0, confidence=0.95)], requirements)
+    low_confidence = calculate_technical_fit([_candidate_skill(name="python", level=7.0, confidence=0.05)], requirements)
+
+    assert high_confidence.score == low_confidence.score == 100.0
+    assert high_confidence.aggregate_confidence > low_confidence.aggregate_confidence
+
+
 def test_technical_fit_zero_requirements_defaults_to_full_score_with_note() -> None:
     result = calculate_technical_fit([_candidate_skill()], [])
 

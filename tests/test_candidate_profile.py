@@ -83,3 +83,19 @@ def test_candidate_profile_defaults_are_empty_lists() -> None:
     assert profile.education == []
     assert profile.skills == []
     assert profile.internships == []
+
+
+def test_extract_candidate_profile_handles_resume_with_no_obvious_skills(monkeypatch: pytest.MonkeyPatch) -> None:
+    """
+    A resume with no extractable technical content (e.g. a purely
+    non-technical background) - the LLM is expected to return an empty
+    skills list rather than fabricate one, and extract_candidate_profile
+    must pass that through unmodified rather than erroring or inventing
+    a placeholder skill.
+    """
+    empty_skills_profile = CandidateProfile(education=[], skills=[], coursework=[])
+    monkeypatch.setattr(profile_module, "parse_structured", lambda **kwargs: empty_skills_profile)
+
+    result = extract_candidate_profile("I enjoy long walks on the beach and reading novels.")
+
+    assert result.skills == []

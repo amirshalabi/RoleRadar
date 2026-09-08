@@ -215,6 +215,48 @@ def test_retrieve_filtered_builds_metadata_filter(monkeypatch: pytest.MonkeyPatc
     assert condition_keys == {"user_id", "skill"}
 
 
+def test_retrieve_top_k_returns_empty_list_when_no_points_found(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake_client = FakeQdrantClient(query_points=[])
+    monkeypatch.setattr("backend.rag.vector_store.get_qdrant_client", lambda: fake_client)
+
+    results = retrieve_top_k(CANDIDATE_EVIDENCE_COLLECTION, "query", FakeEmbeddingProvider())
+
+    assert results == []
+
+
+def test_retrieve_top_k_returns_empty_list_when_collection_does_not_exist(monkeypatch: pytest.MonkeyPatch) -> None:
+    """
+    Querying a collection that was never created (e.g. a brand-new user
+    with no resume evidence indexed yet) must degrade to "no results,"
+    not propagate Qdrant's 404 as an unhandled exception.
+    """
+    from qdrant_client.http.exceptions import UnexpectedResponse
+
+    class _NotFoundQdrantClient(FakeQdrantClient):
+        def query_points(self, *args, **kwargs):
+            raise UnexpectedResponse(status_code=404, reason_phrase="Not Found", content=b"Collection not found", headers={})
+
+    monkeypatch.setattr("backend.rag.vector_store.get_qdrant_client", lambda: _NotFoundQdrantClient())
+
+    results = retrieve_top_k(CANDIDATE_EVIDENCE_COLLECTION, "query", FakeEmbeddingProvider())
+
+    assert results == []
+
+
+def test_retrieve_top_k_reraises_non_404_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A 404 (missing collection) is swallowed into an empty result; any other Qdrant error must NOT be silently hidden."""
+    from qdrant_client.http.exceptions import UnexpectedResponse
+
+    class _ServerErrorQdrantClient(FakeQdrantClient):
+        def query_points(self, *args, **kwargs):
+            raise UnexpectedResponse(status_code=500, reason_phrase="Internal Server Error", content=b"boom", headers={})
+
+    monkeypatch.setattr("backend.rag.vector_store.get_qdrant_client", lambda: _ServerErrorQdrantClient())
+
+    with pytest.raises(UnexpectedResponse):
+        retrieve_top_k(CANDIDATE_EVIDENCE_COLLECTION, "query", FakeEmbeddingProvider())
+
+
 def test_retrieve_filtered_omits_none_values() -> None:
     from backend.rag.vector_store import _build_filter
 
