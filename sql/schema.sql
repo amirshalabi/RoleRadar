@@ -59,10 +59,16 @@ create table if not exists candidate_skills (
     estimated_level numeric(4, 2) not null default 0,
     confidence numeric(4, 2) not null default 0,
     evidence_source text,
+    evidence_snippets jsonb not null default '[]'::jsonb,
     created_at timestamptz not null default now(),
     updated_at timestamptz not null default now(),
     unique (user_id, normalized_skill_name)
 );
+
+-- Safe to re-run against a database created from an earlier version of
+-- this schema, before per-skill evidence snippets were persisted
+-- (backend.candidate.profile.CandidateSkillEstimate.evidence_snippets).
+alter table candidate_skills add column if not exists evidence_snippets jsonb not null default '[]'::jsonb;
 
 -- ---------------------------------------------------------------------
 -- roles

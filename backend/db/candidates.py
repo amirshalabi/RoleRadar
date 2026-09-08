@@ -61,12 +61,16 @@ def upsert_candidate_skill(
     confidence: float,
     display_name: str | None = None,
     evidence_source: str | None = None,
+    evidence_snippets: list[str] | None = None,
 ) -> dict[str, Any]:
     """
     Insert or update a candidate's estimate for a single skill, keyed on
     UNIQUE(user_id, normalized_skill_name). Re-estimating a skill (e.g.
     after a diagnostic result) updates the same row rather than creating
-    a new one.
+    a new one. `evidence_snippets` persists the real resume quotes
+    behind this estimate (backend.candidate.profile.CandidateSkillEstimate
+    .evidence_snippets) so an "evidence count" display never has to
+    fabricate a number - it stays empty until real snippets are saved.
     """
     values = {
         "user_id": user_id,
@@ -75,6 +79,7 @@ def upsert_candidate_skill(
         "estimated_level": estimated_level,
         "confidence": confidence,
         "evidence_source": evidence_source,
+        "evidence_snippets": evidence_snippets or [],
     }
     return upsert_row(
         CANDIDATE_SKILLS_TABLE,

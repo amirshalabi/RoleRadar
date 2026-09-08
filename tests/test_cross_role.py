@@ -186,6 +186,43 @@ def test_calculate_skill_roi_includes_affected_roles() -> None:
     assert result.affected_roles[0].company == "Acme"
 
 
+def test_calculate_skill_roi_average_target_level_is_mean_across_roles() -> None:
+    profile = CandidateProfile(skills=[])
+    ctx1 = _context(role=_role("A"), requirements=[_requirement(normalized="python", target=8.0)])
+    ctx2 = _context(role=_role("B"), requirements=[_requirement(normalized="python", target=6.0)])
+
+    [result] = calculate_skill_roi(profile, [ctx1, ctx2])
+
+    assert result.average_target_level == pytest.approx(7.0)  # mean(8, 6)
+
+
+def test_calculate_skill_roi_candidate_level_reflects_current_estimate() -> None:
+    profile = CandidateProfile(skills=[_skill(name="python", level=4.5)])
+    ctx = _context(role=_role(), requirements=[_requirement(normalized="python", target=8.0)])
+
+    [result] = calculate_skill_roi(profile, [ctx])
+
+    assert result.candidate_level == 4.5
+
+
+def test_calculate_skill_roi_candidate_level_zero_when_not_matched() -> None:
+    profile = CandidateProfile(skills=[])
+    ctx = _context(role=_role(), requirements=[_requirement(normalized="python", target=8.0)])
+
+    [result] = calculate_skill_roi(profile, [ctx])
+
+    assert result.candidate_level == 0.0
+
+
+def test_calculate_skill_roi_affected_roles_carry_role_id_when_supplied() -> None:
+    profile = CandidateProfile(skills=[])
+    ctx = FavoriteRoleContext(role=_role("A"), requirements=[_requirement(normalized="python")], role_id="role-uuid-1")
+
+    [result] = calculate_skill_roi(profile, [ctx])
+
+    assert result.affected_roles[0].role_id == "role-uuid-1"
+
+
 def test_calculate_skill_roi_respects_learning_cost_overrides() -> None:
     profile = CandidateProfile(skills=[])
     ctx = _context(role=_role(), requirements=[_requirement(normalized="python")])
@@ -214,6 +251,16 @@ def test_calculate_skill_roi_deduplicates_repeated_skill_within_one_role() -> No
 # ---------------------------------------------------------------------
 # compare_favorite_roles
 # ---------------------------------------------------------------------
+
+
+def test_compare_favorite_roles_role_carries_role_id_when_supplied() -> None:
+    ctx1 = FavoriteRoleContext(role=_role("A"), role_id="role-uuid-a")
+    ctx2 = FavoriteRoleContext(role=_role("B"), role_id="role-uuid-b")
+
+    result = compare_favorite_roles(CandidateProfile(), [ctx1, ctx2])
+
+    by_title = {c.role.title: c.role.role_id for c in result}
+    assert by_title == {"A": "role-uuid-a", "B": "role-uuid-b"}
 
 
 def test_compare_favorite_roles_rejects_fewer_than_two() -> None:

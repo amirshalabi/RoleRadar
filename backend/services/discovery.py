@@ -360,6 +360,7 @@ def build_favorite_contexts(user_id: str, role_ids: list[str]) -> list[FavoriteR
                 role=_role_from_row(role_row),
                 requirements=[_requirement_from_row(row) for row in requirement_rows],
                 priority=favorite["priority"] if favorite else DEFAULT_FAVORITE_PRIORITY,
+                role_id=role_id,
             )
         )
     return contexts
@@ -461,3 +462,17 @@ def build_study_plan_for_application(user_id: str, role_id: str) -> StudyPlan:
         readiness=analysis.readiness,
         favorite_priority_multiplier=priority_multiplier,
     )
+
+
+def get_requirement_evidence_for_skill(role_id: str, normalized_skill: str) -> list[str]:
+    """
+    The persisted job-posting evidence quotes
+    (backend.db.role_requirements.evidence) backing one role's
+    requirement for one skill - a direct Postgres read, no LLM/Qdrant
+    call. Returns [] if this role has no persisted requirement for that
+    skill (never analyzed, or the skill isn't required here).
+    """
+    for row in role_requirements_db.list_role_requirements(role_id):
+        if row["normalized_skill_name"] == normalized_skill:
+            return row.get("evidence") or []
+    return []

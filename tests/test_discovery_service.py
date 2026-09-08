@@ -342,6 +342,14 @@ def test_build_favorite_contexts_empty_requirements_for_unanalyzed_role(fake_cli
     assert context.requirements == []
 
 
+def test_build_favorite_contexts_carries_role_id(fake_client: FakeSupabaseClient) -> None:
+    role_row = _seed_favorite("Quant Intern", "Meridian", "quant", [])
+
+    [context] = discovery.build_favorite_contexts("u1", [role_row["id"]])
+
+    assert context.role_id == role_row["id"]
+
+
 def test_compare_roles_returns_comparisons_and_summary(fake_client: FakeSupabaseClient) -> None:
     role_a = _seed_favorite("Quant Intern", "Meridian", "quant", SAMPLE_REQUIREMENTS, priority="dream")
     role_b = _seed_favorite(
@@ -443,3 +451,35 @@ def test_build_study_plan_applies_favorite_priority_multiplier(
     priority_a = [item.priority_score for item in plan_a.prep_items]
     priority_b = [item.priority_score for item in plan_b.prep_items]
     assert sum(priority_a) > sum(priority_b)  # dream priority multiplier > backup
+
+
+# ---------------------------------------------------------------------
+# get_requirement_evidence_for_skill
+# ---------------------------------------------------------------------
+
+
+def test_get_requirement_evidence_for_skill_returns_persisted_quotes(fake_client: FakeSupabaseClient) -> None:
+    role_row = _seed_role()
+    role_requirements_db.upsert_role_requirements(
+        role_row["id"],
+        [{"normalized_skill_name": "python", "display_name": "Python", "target_level": 7.0, "importance": 7.0, "is_required": True, "evidence": ["Proficiency in Python required."]}],
+    )
+
+    evidence = discovery.get_requirement_evidence_for_skill(role_row["id"], "python")
+
+    assert evidence == ["Proficiency in Python required."]
+
+
+def test_get_requirement_evidence_for_skill_empty_when_skill_not_required(fake_client: FakeSupabaseClient) -> None:
+    role_row = _seed_role()
+    role_requirements_db.upsert_role_requirements(
+        role_row["id"],
+        [{"normalized_skill_name": "python", "display_name": "Python", "target_level": 7.0, "importance": 7.0, "is_required": True, "evidence": ["x"]}],
+    )
+
+    assert discovery.get_requirement_evidence_for_skill(role_row["id"], "probability") == []
+
+
+def test_get_requirement_evidence_for_skill_empty_when_role_never_analyzed(fake_client: FakeSupabaseClient) -> None:
+    role_row = _seed_role()
+    assert discovery.get_requirement_evidence_for_skill(role_row["id"], "python") == []

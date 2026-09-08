@@ -96,6 +96,13 @@ class RoleSummary(BaseModel):
     external_id: str
     title: str
     company: str
+    role_id: str | None = Field(
+        default=None,
+        description="The role's internal Postgres id (roles.id), when the caller has it - "
+        "lets a UI look up per-role detail (e.g. requirement evidence) without a second query "
+        "keyed on the business-facing external_id. None for callers that never had it (e.g. tests "
+        "building a Role directly rather than from a persisted row).",
+    )
 
 
 class FavoriteRoleContext(BaseModel):
@@ -104,6 +111,9 @@ class FavoriteRoleContext(BaseModel):
     role: Role
     requirements: list[RoleRequirement] = Field(default_factory=list)
     priority: str = DEFAULT_FAVORITE_PRIORITY
+    role_id: str | None = Field(
+        default=None, description="The role's internal Postgres id, threaded through into RoleSummary. See RoleSummary.role_id."
+    )
 
 
 def _priority_multiplier(priority: str) -> float:
@@ -135,6 +145,11 @@ class SkillROIResult(BaseModel):
     normalized_skill: str
     display_skill: str
     roles_requiring_it: int
+    average_target_level: float = Field(description="Mean target_level (0-10) required across the roles that need this skill.")
+    candidate_level: float = Field(
+        description="The candidate's own current estimated_level (0-10) for this skill - identical across every "
+        "role's gap for the same candidate/skill, so this is read once rather than averaged."
+    )
     average_gap: float
     average_importance: float
     weighted_priority: float
@@ -200,6 +215,7 @@ def calculate_skill_roi(
 
         average_gap = sum(gap.raw_gap for gap in gaps) / frequency
         average_importance = sum(gap.importance for gap in gaps) / frequency
+        average_target_level = sum(gap.target_level for gap in gaps) / frequency
         weighted_priority = sum(_priority_multiplier(context.priority) for context in contexts) / frequency
         learning_cost = estimate_learning_cost_hours(normalized_skill, learning_cost_overrides)
         raw_roi = (average_gap * frequency * average_importance * weighted_priority) / learning_cost
@@ -207,13 +223,18 @@ def calculate_skill_roi(
         raw_by_skill[normalized_skill] = {
             "display_skill": gaps[0].display_skill,
             "frequency": frequency,
+            "average_target_level": average_target_level,
+            "candidate_level": gaps[0].candidate_level,  # invariant across roles for one candidate/skill
             "average_gap": average_gap,
             "average_importance": average_importance,
             "weighted_priority": weighted_priority,
             "learning_cost": learning_cost,
             "raw_roi": raw_roi,
             "affected_roles": [
-                RoleSummary(external_id=context.role.external_id, title=context.role.title, company=context.role.company)
+                RoleSummary(
+                    external_id=context.role.external_id, title=context.role.title, company=context.role.company,
+                    role_id=context.role_id,
+                )
                 for context in contexts
             ],
         }
@@ -225,6 +246,8 @@ def calculate_skill_roi(
             normalized_skill=normalized_skill,
             display_skill=data["display_skill"],
             roles_requiring_it=data["frequency"],
+            average_target_level=round(data["average_target_level"], 3),
+            candidate_level=data["candidate_level"],
             average_gap=round(data["average_gap"], 3),
             average_importance=round(data["average_importance"], 3),
             weighted_priority=round(data["weighted_priority"], 3),
@@ -325,7 +348,8 @@ def compare_favorite_roles(
         comparisons.append(
             FavoriteRoleComparison(
                 role=RoleSummary(
-                    external_id=context.role.external_id, title=context.role.title, company=context.role.company
+                    external_id=context.role.external_id, title=context.role.title, company=context.role.company,
+                    role_id=context.role_id,
                 ),
                 priority=context.priority,
                 fit_score=fit_score.overall_score,
