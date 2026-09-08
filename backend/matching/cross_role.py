@@ -266,6 +266,27 @@ class FavoriteRoleComparison(BaseModel):
     prep_hours_allocated: float | None = None
 
 
+def estimate_prep_hours_for_role(
+    skill_gaps: list[SkillGapResult], learning_cost_overrides: dict[str, float] | None = None
+) -> float:
+    """
+    Rough total hours to close every one of a single role's skill gaps:
+    for each gap, the fraction of a full 0->10 gap still open
+    (raw_gap / 10) times estimate_learning_cost_hours() for that skill -
+    the same per-skill hour estimates calculate_skill_roi() uses,
+    applied here to one role's own gaps rather than aggregated across
+    favorites. Same HEURISTIC disclaimer as the rest of this module: a
+    ranking aid, not a calibrated time estimate.
+    """
+    return round(
+        sum(
+            (gap.raw_gap / 10.0) * estimate_learning_cost_hours(gap.normalized_skill, learning_cost_overrides)
+            for gap in skill_gaps
+        ),
+        1,
+    )
+
+
 def compare_favorite_roles(
     profile: CandidateProfile,
     favorite_contexts: list[FavoriteRoleContext],
@@ -318,3 +339,45 @@ def compare_favorite_roles(
             )
         )
     return comparisons
+
+
+class ComparisonSummary(BaseModel):
+    """Three single-winner rollups over an already-computed comparison set. None if there's nothing to summarize."""
+
+    best_current_match: RoleSummary | None = None
+    highest_potential_upside: RoleSummary | None = None
+    largest_prep_burden: RoleSummary | None = None
+
+
+def summarize_comparison(comparisons: list[FavoriteRoleComparison]) -> ComparisonSummary:
+    """
+    Deterministic summaries over compare_favorite_roles()'s output:
+
+    - best_current_match: highest already-computed overall fit_score.
+    - highest_potential_upside: largest remaining TECHNICAL fit headroom
+      (100 - fit_components["technical"]). Technical fit is the
+      dimension most directly addressable through further study/prep -
+      unlike constraints/interest/domain, which usually can't be closed
+      by studying - so this ranks "which role would benefit most from
+      closing skill gaps" rather than raw overall-score headroom, which
+      can be dominated by dimensions no amount of prep will move.
+    - largest_prep_burden: highest prep_hours_allocated. None if no
+      comparison in the set carries a prep_hours_allocated value.
+
+    Returns an all-None ComparisonSummary for an empty input rather than
+    raising - callers decide how to render "nothing to compare yet".
+    """
+    if not comparisons:
+        return ComparisonSummary()
+
+    best = max(comparisons, key=lambda c: c.fit_score)
+    upside = max(comparisons, key=lambda c: 100.0 - c.fit_components.get("technical", 100.0))
+
+    burdened = [c for c in comparisons if c.prep_hours_allocated is not None]
+    heaviest = max(burdened, key=lambda c: c.prep_hours_allocated) if burdened else None
+
+    return ComparisonSummary(
+        best_current_match=best.role,
+        highest_potential_upside=upside.role,
+        largest_prep_burden=heaviest.role if heaviest else None,
+    )

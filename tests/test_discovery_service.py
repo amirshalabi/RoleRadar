@@ -298,3 +298,148 @@ def test_get_or_generate_rationale_regenerates_when_requirements_change(
     discovery.get_or_generate_rationale("u1", role_row, changed_analysis)
 
     assert len(calls) == 2  # requirement target_level changed since the cached rationale was generated
+
+
+# ---------------------------------------------------------------------
+# build_favorite_contexts / compare_roles / get_skill_roi_for_favorites
+# ---------------------------------------------------------------------
+
+
+def _seed_favorite(title, company, role_family, requirements, priority="interested"):
+    role_row = roles_db.upsert_role(company=company, title=title, role_family=role_family, description="desc")
+    favorites_db.save_favorite("u1", role_row["id"], priority=priority)
+    if requirements:
+        role_requirements_db.upsert_role_requirements(
+            role_row["id"],
+            [
+                {
+                    "normalized_skill_name": r.normalized_skill, "display_name": r.skill,
+                    "target_level": r.target_level, "importance": r.importance,
+                    "is_required": r.required, "evidence": r.evidence,
+                }
+                for r in requirements
+            ],
+        )
+    return role_row
+
+
+def test_build_favorite_contexts_reuses_persisted_requirements(fake_client: FakeSupabaseClient) -> None:
+    role_row = _seed_favorite(
+        "Quant Intern", "Meridian", "quant", [SAMPLE_REQUIREMENTS[0]], priority="dream"
+    )
+
+    [context] = discovery.build_favorite_contexts("u1", [role_row["id"]])
+
+    assert context.priority == "dream"
+    assert context.requirements[0].normalized_skill == "probability"
+
+
+def test_build_favorite_contexts_empty_requirements_for_unanalyzed_role(fake_client: FakeSupabaseClient) -> None:
+    role_row = _seed_favorite("SWE Intern", "Acme", "swe", [])
+
+    [context] = discovery.build_favorite_contexts("u1", [role_row["id"]])
+
+    assert context.requirements == []
+
+
+def test_compare_roles_returns_comparisons_and_summary(fake_client: FakeSupabaseClient) -> None:
+    role_a = _seed_favorite("Quant Intern", "Meridian", "quant", SAMPLE_REQUIREMENTS, priority="dream")
+    role_b = _seed_favorite(
+        "SWE Intern", "Acme", "swe",
+        [RoleRequirement(skill="Python", normalized_skill="python", target_level=9.0, importance=9.0, required=True, evidence=["x"])],
+        priority="backup",
+    )
+    candidates_db.upsert_candidate_skill("u1", "python", estimated_level=8.0, confidence=0.8, display_name="Python")
+
+    comparisons, summary = discovery.compare_roles("u1", [role_a["id"], role_b["id"]])
+
+    assert len(comparisons) == 2
+    assert summary.best_current_match is not None
+    assert summary.largest_prep_burden is not None
+
+
+def test_get_skill_roi_for_favorites_covers_all_saved_roles(fake_client: FakeSupabaseClient) -> None:
+    _seed_favorite("Quant Intern", "Meridian", "quant", SAMPLE_REQUIREMENTS, priority="dream")
+    _seed_favorite(
+        "SWE Intern", "Acme", "swe",
+        [RoleRequirement(skill="Python", normalized_skill="python", target_level=9.0, importance=9.0, required=True, evidence=["x"])],
+        priority="backup",
+    )
+
+    results = discovery.get_skill_roi_for_favorites("u1")
+
+    by_skill = {r.normalized_skill: r for r in results}
+    assert by_skill["python"].roles_requiring_it == 2
+    assert by_skill["probability"].roles_requiring_it == 1
+
+
+def test_get_skill_roi_for_favorites_empty_when_no_favorites(fake_client: FakeSupabaseClient) -> None:
+    assert discovery.get_skill_roi_for_favorites("u1") == []
+
+
+# ---------------------------------------------------------------------
+# build_study_plan_for_application
+# ---------------------------------------------------------------------
+
+
+def test_build_study_plan_raises_without_interview_date(monkeypatch: pytest.MonkeyPatch, fake_client: FakeSupabaseClient) -> None:
+    role_row = _seed_role()
+    monkeypatch.setattr(discovery, "extract_role_requirements", lambda role, model=None: SAMPLE_REQUIREMENTS)
+    applications_db.upsert_application("u1", role_row["id"], status="applied")
+
+    with pytest.raises(ValueError):
+        discovery.build_study_plan_for_application("u1", role_row["id"])
+
+
+def test_build_study_plan_raises_without_any_application(fake_client: FakeSupabaseClient) -> None:
+    role_row = _seed_role()
+
+    with pytest.raises(ValueError):
+        discovery.build_study_plan_for_application("u1", role_row["id"])
+
+
+def test_build_study_plan_uses_interview_date_and_default_hours(
+    monkeypatch: pytest.MonkeyPatch, fake_client: FakeSupabaseClient
+) -> None:
+    role_row = _seed_role(role_family="quant")
+    monkeypatch.setattr(discovery, "extract_role_requirements", lambda role, model=None: SAMPLE_REQUIREMENTS)
+    applications_db.upsert_application("u1", role_row["id"], status="interview", interview_date="2026-09-20")
+
+    plan = discovery.build_study_plan_for_application("u1", role_row["id"])
+
+    assert plan.interview_date.isoformat() == "2026-09-20"
+    assert plan.hours_available_per_day == discovery.DEFAULT_PREP_HOURS_PER_DAY
+
+
+def test_build_study_plan_uses_applications_own_hours_available(
+    monkeypatch: pytest.MonkeyPatch, fake_client: FakeSupabaseClient
+) -> None:
+    role_row = _seed_role(role_family="quant")
+    monkeypatch.setattr(discovery, "extract_role_requirements", lambda role, model=None: SAMPLE_REQUIREMENTS)
+    applications_db.upsert_application(
+        "u1", role_row["id"], status="interview", interview_date="2026-09-20", hours_available_per_day=5.0
+    )
+
+    plan = discovery.build_study_plan_for_application("u1", role_row["id"])
+
+    assert plan.hours_available_per_day == 5.0
+
+
+def test_build_study_plan_applies_favorite_priority_multiplier(
+    monkeypatch: pytest.MonkeyPatch, fake_client: FakeSupabaseClient
+) -> None:
+    role_a = _seed_role(role_family="quant")
+    role_b = roles_db.upsert_role(company="Other Co", title="Other Intern", role_family="quant", description="Build trading signals. Need probability and Python.")
+    monkeypatch.setattr(discovery, "extract_role_requirements", lambda role, model=None: SAMPLE_REQUIREMENTS)
+
+    applications_db.upsert_application("u1", role_a["id"], status="interview", interview_date="2026-09-20")
+    applications_db.upsert_application("u1", role_b["id"], status="interview", interview_date="2026-09-20")
+    favorites_db.save_favorite("u1", role_a["id"], priority="dream")
+    favorites_db.save_favorite("u1", role_b["id"], priority="backup")
+
+    plan_a = discovery.build_study_plan_for_application("u1", role_a["id"])
+    plan_b = discovery.build_study_plan_for_application("u1", role_b["id"])
+
+    priority_a = [item.priority_score for item in plan_a.prep_items]
+    priority_b = [item.priority_score for item in plan_b.prep_items]
+    assert sum(priority_a) > sum(priority_b)  # dream priority multiplier > backup

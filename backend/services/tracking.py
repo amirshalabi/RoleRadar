@@ -112,6 +112,7 @@ def update_application_stage(
     deadline: str | None = None,
     interview_date: str | None = None,
     notes: str | None = None,
+    hours_available_per_day: float | None = None,
 ) -> dict[str, Any]:
     """
     Advance/update a role's application-tracking row. Any field left
@@ -127,4 +128,5 @@ def update_application_stage(
         deadline=deadline,
         interview_date=interview_date,
         notes=notes,
+        hours_available_per_day=hours_available_per_day,
     )

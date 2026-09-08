@@ -15,11 +15,15 @@ from backend.matching.cross_role import (
     DEFAULT_LEARNING_COST_HOURS,
     FALLBACK_LEARNING_COST_HOURS,
     FAVORITE_PRIORITY_MULTIPLIERS,
+    ComparisonSummary,
     FavoriteRoleContext,
     calculate_skill_roi,
     compare_favorite_roles,
     estimate_learning_cost_hours,
+    estimate_prep_hours_for_role,
+    summarize_comparison,
 )
+from backend.matching.gaps import calculate_skill_gaps
 
 
 def _role(title="Role", company="Acme", **overrides):
@@ -301,3 +305,97 @@ def test_compare_favorite_roles_preserves_favorite_priority() -> None:
 
     priorities = {c.role.title: c.priority for c in result}
     assert priorities == {"A": "dream", "B": "backup"}
+
+
+# ---------------------------------------------------------------------
+# estimate_prep_hours_for_role
+# ---------------------------------------------------------------------
+
+
+def test_estimate_prep_hours_zero_when_no_gaps() -> None:
+    gaps = calculate_skill_gaps([_skill(name="python", level=10.0)], [_requirement(normalized="python", target=5.0)])
+    assert estimate_prep_hours_for_role(gaps) == 0.0
+
+
+def test_estimate_prep_hours_scales_with_gap_fraction() -> None:
+    """A full 0->10 gap costs the full learning-cost estimate; half a gap costs half."""
+    full_gap = calculate_skill_gaps([], [_requirement(normalized="python", target=10.0)])
+    half_gap = calculate_skill_gaps(
+        [_skill(name="python", level=5.0)], [_requirement(normalized="python", target=10.0)]
+    )
+
+    full_hours = estimate_prep_hours_for_role(full_gap)
+    half_hours = estimate_prep_hours_for_role(half_gap)
+
+    assert full_hours == pytest.approx(DEFAULT_LEARNING_COST_HOURS["python"], abs=0.1)
+    assert half_hours == pytest.approx(full_hours / 2, abs=0.1)
+
+
+def test_estimate_prep_hours_sums_across_multiple_skills() -> None:
+    gaps = calculate_skill_gaps(
+        [],
+        [_requirement(normalized="python", target=10.0), _requirement(normalized="c++", skill="C++", target=10.0)],
+    )
+    total = estimate_prep_hours_for_role(gaps)
+    assert total == pytest.approx(DEFAULT_LEARNING_COST_HOURS["python"] + DEFAULT_LEARNING_COST_HOURS["c++"], abs=0.2)
+
+
+def test_estimate_prep_hours_respects_overrides() -> None:
+    gaps = calculate_skill_gaps([], [_requirement(normalized="python", target=10.0)])
+    assert estimate_prep_hours_for_role(gaps, learning_cost_overrides={"python": 10.0}) == pytest.approx(10.0)
+
+
+# ---------------------------------------------------------------------
+# summarize_comparison
+# ---------------------------------------------------------------------
+
+
+def test_summarize_comparison_empty_input_returns_all_none() -> None:
+    assert summarize_comparison([]) == ComparisonSummary()
+
+
+def test_summarize_comparison_best_current_match_is_highest_fit_score() -> None:
+    profile = CandidateProfile(skills=[_skill(name="python", level=9.0)])
+    contexts = [
+        _context(role=_role("Strong"), requirements=[_requirement(normalized="python", target=8.0)]),
+        _context(role=_role("Weak"), requirements=[_requirement(normalized="c++", skill="C++", target=9.0)]),
+    ]
+    comparisons = compare_favorite_roles(profile, contexts)
+
+    summary = summarize_comparison(comparisons)
+
+    assert summary.best_current_match.title == "Strong"
+
+
+def test_summarize_comparison_highest_potential_upside_is_largest_technical_headroom() -> None:
+    profile = CandidateProfile(skills=[_skill(name="python", level=9.0)])
+    contexts = [
+        _context(role=_role("SmallGap"), requirements=[_requirement(normalized="python", target=9.0)]),
+        _context(role=_role("BigGap"), requirements=[_requirement(normalized="c++", skill="C++", target=9.0)]),
+    ]
+    comparisons = compare_favorite_roles(profile, contexts)
+
+    summary = summarize_comparison(comparisons)
+
+    assert summary.highest_potential_upside.title == "BigGap"
+
+
+def test_summarize_comparison_largest_prep_burden_uses_supplied_hours() -> None:
+    role_a, role_b = _role("A"), _role("B")
+    contexts = [_context(role=role_a), _context(role=role_b)]
+    comparisons = compare_favorite_roles(
+        CandidateProfile(), contexts, prep_hours_by_role={role_a.external_id: 5.0, role_b.external_id: 40.0}
+    )
+
+    summary = summarize_comparison(comparisons)
+
+    assert summary.largest_prep_burden.title == "B"
+
+
+def test_summarize_comparison_largest_prep_burden_none_when_no_hours_supplied() -> None:
+    contexts = [_context(role=_role("A")), _context(role=_role("B"))]
+    comparisons = compare_favorite_roles(CandidateProfile(), contexts)
+
+    summary = summarize_comparison(comparisons)
+
+    assert summary.largest_prep_burden is None

@@ -26,6 +26,7 @@ reimplemented here.
 from __future__ import annotations
 
 import logging
+from datetime import date
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -38,9 +39,22 @@ from backend.db import roles as roles_db
 from backend.ingestion.normalize import Role
 from backend.llm.extract_requirements import RoleRequirement, extract_role_requirements
 from backend.llm.rationale import FitRationale, generate_fit_rationale
+from backend.matching.cross_role import (
+    DEFAULT_FAVORITE_PRIORITY,
+    FAVORITE_PRIORITY_MULTIPLIERS,
+    ComparisonSummary,
+    FavoriteRoleComparison,
+    FavoriteRoleContext,
+    SkillROIResult,
+    calculate_skill_roi,
+    compare_favorite_roles,
+    estimate_prep_hours_for_role,
+    summarize_comparison,
+)
 from backend.matching.gaps import SkillGapResult, calculate_skill_gaps
 from backend.matching.scorer import FitScoreResult, calculate_fit_score
 from backend.planning.readiness import ReadinessResult, calculate_readiness
+from backend.planning.scheduler import StudyPlan, generate_study_plan
 from backend.services import tracking
 from backend.utils.hashing import hash_json
 
@@ -85,6 +99,7 @@ class RoleCard(BaseModel):
 
     is_saved: bool = False
     priority: str | None = None
+    notes: str | None = None
 
     application_status: str | None = None
     deadline: str | None = None
@@ -199,6 +214,7 @@ def list_role_cards(user_id: str) -> list[RoleCard]:
                 description=role_row.get("description"),
                 is_saved=favorite is not None,
                 priority=favorite["priority"] if favorite else None,
+                notes=favorite.get("notes") if favorite else None,
                 application_status=application["status"] if application else None,
                 deadline=application.get("deadline") if application else None,
                 interview_date=application.get("interview_date") if application else None,
@@ -313,3 +329,135 @@ def get_or_generate_rationale(user_id: str, role_row: dict[str, Any], analysis: 
     )
     rationales_db.upsert_rationale(user_id, role_id, inputs_hash, rationale.model_dump(mode="json"))
     return rationale
+
+
+# ---------------------------------------------------------------------
+# Cross-favorite comparison and skill ROI (backend.matching.cross_role)
+# ---------------------------------------------------------------------
+
+
+def build_favorite_contexts(user_id: str, role_ids: list[str]) -> list[FavoriteRoleContext]:
+    """
+    Build one backend.matching.cross_role.FavoriteRoleContext per role
+    id, reusing each role's persisted requirements
+    (backend.db.role_requirements) if it has already been analyzed -
+    this NEVER calls the LLM. A role with no persisted requirements yet
+    (never opened via analyze_role()) contributes an empty requirements
+    list rather than triggering an extraction as a side effect of
+    loading a comparison/ROI view - it simply won't surface in any
+    skill-gap-based output for skills it hasn't been analyzed against.
+    """
+    favorites_by_role = {row["role_id"]: row for row in tracking.list_saved_roles(user_id)}
+    contexts: list[FavoriteRoleContext] = []
+    for role_id in role_ids:
+        role_row = roles_db.get_role_by_id(role_id)
+        if role_row is None:
+            continue
+        requirement_rows = role_requirements_db.list_role_requirements(role_id)
+        favorite = favorites_by_role.get(role_id)
+        contexts.append(
+            FavoriteRoleContext(
+                role=_role_from_row(role_row),
+                requirements=[_requirement_from_row(row) for row in requirement_rows],
+                priority=favorite["priority"] if favorite else DEFAULT_FAVORITE_PRIORITY,
+            )
+        )
+    return contexts
+
+
+def compare_roles(user_id: str, role_ids: list[str]) -> tuple[list[FavoriteRoleComparison], ComparisonSummary]:
+    """
+    Full deterministic side-by-side comparison of 2-4 favorite roles:
+    fit (recomputed fresh from each role's persisted requirements
+    against the candidate's CURRENT skills - never a stale cached
+    fit_scores row), readiness, top skill gaps, and an estimated
+    prep-hours burden (backend.matching.cross_role.estimate_prep_hours_for_role),
+    plus the three summary rollups
+    (backend.matching.cross_role.summarize_comparison). Raises
+    ValueError if `role_ids` isn't 2-4 entries (see compare_favorite_roles()).
+    """
+    skill_rows = candidates_db.list_candidate_skills(user_id)
+    profile = CandidateProfile(skills=_skill_estimates_from_rows(skill_rows))
+    contexts = build_favorite_contexts(user_id, role_ids)
+
+    readiness_scores: dict[str, float] = {}
+    prep_hours_by_role: dict[str, float] = {}
+    for context in contexts:
+        gaps = calculate_skill_gaps(profile.skills, context.requirements)
+        prep_hours_by_role[context.role.external_id] = estimate_prep_hours_for_role(gaps)
+        if context.role.role_family:
+            readiness_scores[context.role.external_id] = calculate_readiness(
+                profile, context.role.role_family
+            ).overall_readiness
+
+    comparisons = compare_favorite_roles(
+        profile, contexts, readiness_scores=readiness_scores, prep_hours_by_role=prep_hours_by_role
+    )
+    return comparisons, summarize_comparison(comparisons)
+
+
+def get_skill_roi_for_favorites(user_id: str) -> list[SkillROIResult]:
+    """
+    Cross-role skill ROI (backend.matching.cross_role.calculate_skill_roi)
+    across EVERY one of a user's saved roles - not just a compared
+    subset - for a "common skill gaps across your favorites" view.
+    """
+    favorite_role_ids = [row["role_id"] for row in tracking.list_saved_roles(user_id)]
+    contexts = build_favorite_contexts(user_id, favorite_role_ids)
+    skill_rows = candidates_db.list_candidate_skills(user_id)
+    profile = CandidateProfile(skills=_skill_estimates_from_rows(skill_rows))
+    return calculate_skill_roi(profile, contexts)
+
+
+# ---------------------------------------------------------------------
+# Interview prep plan for one tracked application
+# ---------------------------------------------------------------------
+
+# Assumed daily study time when an application has no
+# hours_available_per_day of its own set yet - a documented default, not
+# a measurement (mirrors the HEURISTIC framing in backend.matching.cross_role).
+DEFAULT_PREP_HOURS_PER_DAY = 2.0
+
+
+def build_study_plan_for_application(user_id: str, role_id: str) -> StudyPlan:
+    """
+    Build a fresh, fully deterministic interview-prep study plan
+    (backend.planning.scheduler.generate_study_plan) for one tracked
+    application: the role's persisted requirements (extracted via
+    analyze_role() only if this role has never been analyzed before),
+    the candidate's current skill gaps and readiness against it, the
+    application's own interview_date and hours_available_per_day, and a
+    favorite-priority multiplier if the role is favorited.
+
+    Always recomputed fresh from current data - nothing about the plan
+    is cached/persisted, so calling this again after skills, the role's
+    requirements, or the application's interview_date/hours change
+    immediately reflects that, with no separate invalidation step needed.
+
+    Raises ValueError if the application has no interview_date set (there
+    is nothing to schedule against) or the role has no description/cached
+    requirements to analyze.
+    """
+    application = tracking.get_application_status(user_id, role_id)
+    if application is None or not application.get("interview_date"):
+        raise ValueError("This application has no interview date set yet.")
+
+    role_row = roles_db.get_role_by_id(role_id)
+    if role_row is None:
+        raise ValueError("This role no longer exists.")
+
+    analysis = analyze_role(user_id, role_row)
+
+    favorite = tracking.get_favorite(user_id, role_id)
+    priority = favorite["priority"] if favorite else DEFAULT_FAVORITE_PRIORITY
+    priority_multiplier = FAVORITE_PRIORITY_MULTIPLIERS.get(priority, 1.0)
+    hours_per_day = application.get("hours_available_per_day") or DEFAULT_PREP_HOURS_PER_DAY
+
+    return generate_study_plan(
+        analysis.gaps,
+        interview_date=date.fromisoformat(application["interview_date"]),
+        current_date=date.today(),
+        hours_available_per_day=hours_per_day,
+        readiness=analysis.readiness,
+        favorite_priority_multiplier=priority_multiplier,
+    )
