@@ -286,8 +286,7 @@ def analyze_role(user_id: str, role_row: dict[str, Any]) -> RoleAnalysis:
             ],
         )
 
-    skill_rows = candidates_db.list_candidate_skills(user_id)
-    profile = CandidateProfile(skills=_skill_estimates_from_rows(skill_rows))
+    profile = build_candidate_profile(user_id)
 
     fit_result = calculate_fit_score(profile, role, requirements)
     roles_db.upsert_fit_score(user_id, role_id, fit_result.overall_score, fit_result.weights_used)
@@ -389,8 +388,7 @@ def compare_roles(user_id: str, role_ids: list[str]) -> tuple[list[FavoriteRoleC
     (backend.matching.cross_role.summarize_comparison). Raises
     ValueError if `role_ids` isn't 2-4 entries (see compare_favorite_roles()).
     """
-    skill_rows = candidates_db.list_candidate_skills(user_id)
-    profile = CandidateProfile(skills=_skill_estimates_from_rows(skill_rows))
+    profile = build_candidate_profile(user_id)
     contexts = build_favorite_contexts(user_id, role_ids)
 
     readiness_scores: dict[str, float] = {}
@@ -417,8 +415,7 @@ def get_skill_roi_for_favorites(user_id: str) -> list[SkillROIResult]:
     """
     favorite_role_ids = [row["role_id"] for row in tracking.list_saved_roles(user_id)]
     contexts = build_favorite_contexts(user_id, favorite_role_ids)
-    skill_rows = candidates_db.list_candidate_skills(user_id)
-    profile = CandidateProfile(skills=_skill_estimates_from_rows(skill_rows))
+    profile = build_candidate_profile(user_id)
     return calculate_skill_roi(profile, contexts)
 
 
