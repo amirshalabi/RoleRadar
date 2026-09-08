@@ -1,0 +1,31 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # No OPENAI_API_KEY / SUPABASE_URL / SUPABASE_KEY / QDRANT_URL /
+      # QDRANT_API_KEY are set here, intentionally - the suite never
+      # makes a live call to any of those services. Postgres is stood
+      # in for by an in-memory fake client (tests/_fake_supabase.py)
+      # with real ON CONFLICT/idempotency semantics; OpenAI and Qdrant
+      # calls are monkeypatched at the client boundary. A test that
+      # genuinely needs live credentials would fail loudly here rather
+      # than silently pass, since none are configured.
+      - name: Run tests
+        run: pytest -q

@@ -92,6 +92,7 @@ pages/         Streamlit multipage app
 sql/           schema.sql (re-runnable, additive migrations)
 scripts/       demo_end_to_end.py — full-pipeline integration script
 tests/         563 tests, offline (fake Postgres/Qdrant/OpenAI clients)
+.github/       CI workflow (test.yml) — runs the suite on push/PR, no secrets needed
 ```
 
 ## Tech Stack
@@ -232,6 +233,12 @@ pytest
 ```
 
 **563 tests, all passing**, and all fully offline — no real Supabase, OpenAI, or Qdrant call happens in the suite. Persistence tests run against an in-memory fake Postgres client (`tests/_fake_supabase.py`) with real `ON CONFLICT`/idempotency semantics; LLM and Qdrant calls are monkeypatched at the client boundary; four Streamlit pages are exercised end-to-end via `streamlit.testing.v1.AppTest` against that same fake database. Coverage spans normal paths and a deliberate edge-case audit — duplicate ingestion, empty/malformed PDFs, zero skill overlap, interview-today/interview-passed/zero-minutes planning, one ingestion source failing, a missing Qdrant collection, and more.
+
+### Continuous Integration
+
+[`.github/workflows/test.yml`](.github/workflows/test.yml) runs the full suite on every push and every pull request: checkout → `setup-python` (3.11, pip cache) → `pip install -r requirements.txt` → `pytest -q`.
+
+No `OPENAI_API_KEY` / `SUPABASE_URL` / `SUPABASE_KEY` / `QDRANT_URL` / `QDRANT_API_KEY` are set in the workflow, and none are needed — nothing in the suite makes a live call to any of those services (see above), so there's nothing to mock at the CI level beyond what the tests already mock themselves. No secrets are configured or exposed in the workflow at all; a test that genuinely required live credentials would fail loudly on a clean runner rather than silently pass.
 
 ## Future Improvements
 
