@@ -208,7 +208,11 @@ alter table applications add constraint applications_status_check
 
 -- ---------------------------------------------------------------------
 -- assessment_results
--- Diagnostic/assessment attempts that can update skill confidence.
+-- Diagnostic/assessment attempts that update readiness
+-- (backend.planning.readiness.DiagnosticResult). Append-only, like
+-- ingestion_runs - each attempt is a genuinely new event, so
+-- backend.db.assessment_results always inserts a fresh row rather than
+-- upserting over a prior attempt at the same topic.
 -- ---------------------------------------------------------------------
 create table if not exists assessment_results (
     id uuid primary key default gen_random_uuid(),
@@ -220,19 +224,43 @@ create table if not exists assessment_results (
     taken_at timestamptz not null default now()
 );
 
+-- Safe to re-run against a database created before DiagnosticResult's
+-- absolute confidence (as opposed to confidence_delta's original,
+-- never-implemented "incremental adjustment" meaning) was persisted.
+alter table assessment_results add column if not exists confidence numeric(4, 2) not null default 0.9;
+
 -- ---------------------------------------------------------------------
 -- study_plans
--- One prep plan per (user, application), regenerated adaptively.
+-- One CURRENT prep plan per application, regenerated adaptively
+-- (backend.planning.adaptive.revise_study_plan). A revision never
+-- deletes or mutates a prior generation's row - it flips the prior
+-- is_current row to false and inserts a new one - so the full version
+-- history stays intact in Postgres (backend.db.study_plans).
 -- ---------------------------------------------------------------------
 create table if not exists study_plans (
     id uuid primary key default gen_random_uuid(),
     user_id uuid not null references users(id) on delete cascade,
     application_id uuid references applications(id) on delete cascade,
-    total_hours_available numeric(6, 2) not null,
+    total_hours_available numeric(6, 2),
     interview_date date,
     generated_at timestamptz not null default now(),
     is_current boolean not null default true
 );
+
+-- Safe to re-run against a database created before adaptive replanning
+-- and full plan persistence existed - total_hours_available is
+-- superseded by hours_available_per_day + total_available_minutes
+-- below, so its NOT NULL constraint is dropped rather than populated
+-- with an approximated value.
+alter table study_plans alter column total_hours_available drop not null;
+alter table study_plans add column if not exists hours_available_per_day numeric(5, 2);
+alter table study_plans add column if not exists days_remaining integer;
+alter table study_plans add column if not exists scheduling_days integer;
+alter table study_plans add column if not exists total_available_minutes numeric(10, 2);
+alter table study_plans add column if not exists version integer not null default 1;
+alter table study_plans add column if not exists previous_version integer;
+alter table study_plans add column if not exists revision_reason text;
+alter table study_plans add column if not exists notes jsonb not null default '[]'::jsonb;
 
 -- ---------------------------------------------------------------------
 -- study_tasks
@@ -242,12 +270,22 @@ create table if not exists study_tasks (
     id uuid primary key default gen_random_uuid(),
     study_plan_id uuid not null references study_plans(id) on delete cascade,
     normalized_skill_name text not null,
-    allocated_hours numeric(5, 2) not null,
+    allocated_hours numeric(5, 2),
     priority_score numeric(6, 3) not null,
     task_description text,
     is_complete boolean not null default false,
     created_at timestamptz not null default now()
 );
+
+-- Safe to re-run against a database created before day-by-day
+-- scheduling (backend.planning.scheduler.StudyTask) was persisted.
+-- allocated_hours' NOT NULL is dropped in favor of allocated_minutes,
+-- the precision the scheduler actually works in.
+alter table study_tasks alter column allocated_hours drop not null;
+alter table study_tasks add column if not exists display_name text;
+alter table study_tasks add column if not exists day_index integer;
+alter table study_tasks add column if not exists scheduled_date date;
+alter table study_tasks add column if not exists allocated_minutes numeric(7, 2);
 
 -- ---------------------------------------------------------------------
 -- role_rationales

@@ -124,6 +124,18 @@ def _skill_estimates_from_rows(skill_rows: list[dict[str, Any]]) -> list[Candida
     ]
 
 
+def build_candidate_profile(user_id: str) -> CandidateProfile:
+    """
+    The candidate's current skills-only CandidateProfile (no persisted
+    coursework/domain_experience/etc. - see this module's docstring for
+    that pre-existing data-model limitation), for any caller (this
+    module or backend.services.prep) that needs a fresh profile without
+    duplicating the skill-row-to-estimate conversion.
+    """
+    skill_rows = candidates_db.list_candidate_skills(user_id)
+    return CandidateProfile(skills=_skill_estimates_from_rows(skill_rows))
+
+
 def _requirement_from_row(row: dict[str, Any]) -> RoleRequirement:
     return RoleRequirement(
         skill=row.get("display_name") or row["normalized_skill_name"],

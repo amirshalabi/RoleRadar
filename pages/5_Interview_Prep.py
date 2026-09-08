@@ -1,122 +1,316 @@
 """
-Interview Prep page: interview readiness and a deadline-aware prep plan.
+Interview Prep page: a persisted, diagnostic-adaptive study plan for one
+tracked application with an interview date.
 
-Readiness (backend.planning.readiness) only needs candidate skills and
-a role family, both of which ARE persisted - so this page computes a
-real readiness breakdown for your nearest upcoming interview. A full
-minute-by-minute study plan (backend.planning.scheduler) additionally
-needs extracted RoleRequirement data, which isn't persisted yet (see
-Skill Gaps for the same limitation) - that section shows an honest
-empty state in production and a real computation against sample data in
-Demo mode.
+This file renders only. All planning arithmetic comes from
+backend.services.prep, which wraps backend.planning.scheduler (the
+initial plan) and backend.planning.adaptive (diagnostic-driven
+revisions) with real Postgres persistence
+(backend.db.study_plans, backend.db.assessment_results). A plan and its
+completed-task history are read fresh from the database on every rerun
+- marking a task complete or submitting a diagnostic immediately
+persists through backend.services.prep, never held only in
+st.session_state. The one thing kept in session_state is the last
+diagnostic's before/after readiness numbers for display - transient UI
+feedback, not the plan's source of truth.
 """
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
+from typing import Any
 
 import streamlit as st
 
 from backend.candidate.profile import CandidateProfile, CandidateSkillEstimate
-from backend.db import candidates as candidates_db
-from backend.ingestion.normalize import normalize_role
 from backend.llm.extract_requirements import RoleRequirement
 from backend.matching.gaps import calculate_skill_gaps
-from backend.planning.readiness import calculate_readiness
-from backend.planning.scheduler import generate_study_plan
-from backend.services import tracking
+from backend.planning.adaptive import revise_study_plan
+from backend.planning.readiness import DiagnosticResult, calculate_readiness, get_readiness_weights
+from backend.planning.scheduler import StudyPlan, generate_study_plan
+from backend.services import discovery, prep, tracking
 from ui_common import configure_page, database_not_configured_notice, empty_state, get_current_user_id, is_demo_mode
 
 configure_page("Interview Prep", icon="🧠")
 st.title("🧠 Interview Prep")
+st.caption("A persisted, diagnostic-adaptive study plan for one tracked application.")
 st.divider()
 
 
-def _skills_from_rows(rows: list[dict]) -> list[CandidateSkillEstimate]:
-    return [
-        CandidateSkillEstimate(
-            normalized_skill_name=row["normalized_skill_name"],
-            display_name=row.get("display_name") or row["normalized_skill_name"],
-            estimated_level=row["estimated_level"],
-            confidence=row["confidence"],
-        )
-        for row in rows
-    ]
+# ---------------------------------------------------------------------
+# Demo data - the same candidate/role used elsewhere in demo mode. The
+# demo plan and its diagnostics live only in st.session_state (there is
+# no real application/database to persist against in demo mode), but
+# every number is still produced by the REAL scheduler/adaptive modules.
+# ---------------------------------------------------------------------
+
+_DEMO_ROLE_FAMILY = "quant"
+_DEMO_INTERVIEW_DATE = date.today() + timedelta(days=6)
+_DEMO_REQUIREMENTS = [
+    RoleRequirement(skill="Probability", normalized_skill="probability", target_level=8, importance=9, required=True, evidence=["x"]),
+    RoleRequirement(skill="Python", normalized_skill="python", target_level=7, importance=7, required=True, evidence=["x"]),
+]
 
 
-def _render_readiness(readiness) -> None:
-    st.progress(min(readiness.overall_readiness / 100, 1.0), text=f"Overall readiness: {readiness.overall_readiness:.1f} / 100")
-    cols = st.columns(len(readiness.topic_readiness))
-    for col, topic in zip(cols, readiness.topic_readiness):
-        col.metric(topic.topic.replace("_", " ").title(), f"{topic.readiness_score:.0f}")
-    if readiness.major_gaps:
-        st.markdown("**Major gaps**")
-        for gap in readiness.major_gaps:
-            st.caption(f"{gap.topic.replace('_', ' ').title()} · {gap.readiness_score:.0f}/100")
-
-
-if is_demo_mode():
-    profile = CandidateProfile(
+def _demo_profile() -> CandidateProfile:
+    return CandidateProfile(
         skills=[
             CandidateSkillEstimate(normalized_skill_name="python", display_name="Python", estimated_level=7.5, confidence=0.7),
             CandidateSkillEstimate(normalized_skill_name="algorithms", display_name="Algorithms", estimated_level=4.0, confidence=0.4),
             CandidateSkillEstimate(normalized_skill_name="probability", display_name="Probability", estimated_level=3.0, confidence=0.3),
         ]
     )
-    role_family = "quant"
-    role = normalize_role({"title": "Quantitative Research Intern", "company": "Meridian Capital", "role_family": role_family})
-    requirements = [
-        RoleRequirement(skill="Probability", normalized_skill="probability", target_level=8, importance=9, required=True, evidence=["x"]),
-        RoleRequirement(skill="Python", normalized_skill="python", target_level=7, importance=7, required=True, evidence=["x"]),
+
+
+def _init_demo_state() -> None:
+    if "demo_prep_tasks" in st.session_state:
+        return
+    profile = _demo_profile()
+    gaps = calculate_skill_gaps(profile.skills, _DEMO_REQUIREMENTS)
+    readiness = calculate_readiness(profile, _DEMO_ROLE_FAMILY)
+    plan = generate_study_plan(
+        gaps, interview_date=_DEMO_INTERVIEW_DATE, current_date=date.today(), hours_available_per_day=2.0, readiness=readiness
+    )
+    st.session_state["demo_prep_meta"] = {
+        "interview_date": plan.interview_date.isoformat(),
+        "hours_available_per_day": plan.hours_available_per_day,
+        "days_remaining": plan.days_remaining,
+        "scheduling_days": plan.scheduling_days,
+        "total_available_minutes": plan.total_available_minutes,
+        "version": 1,
+    }
+    st.session_state["demo_prep_tasks"] = [
+        {**prep.task_to_row(t), "id": f"demo-task-{i}"} for i, t in enumerate(plan.tasks)
     ]
-    interview_date = date.today().replace(day=min(date.today().day + 6, 28))
+    st.session_state["demo_prep_diagnostics"] = []
 
-    st.subheader("🧠 Readiness")
-    with st.container(border=True):
-        _render_readiness(calculate_readiness(profile, role_family))
 
-    st.subheader("📝 Prep plan")
-    with st.container(border=True):
-        gaps = calculate_skill_gaps(profile.skills, requirements)
-        plan = generate_study_plan(gaps, interview_date=interview_date, current_date=date.today(), hours_available_per_day=2.0)
-        st.caption(f"{plan.scheduling_days} day(s) remaining · {plan.total_available_minutes:.0f} minutes available")
-        for task in plan.tasks[:8]:
-            st.markdown(f"- **{task.display_name}** — {task.allocated_minutes:.0f} min ({task.description})")
-    st.stop()
+def _demo_plain_plan() -> StudyPlan:
+    meta = st.session_state["demo_prep_meta"]
+    tasks = [prep.row_to_task(t) for t in st.session_state["demo_prep_tasks"]]
+    return StudyPlan(
+        interview_date=date.fromisoformat(meta["interview_date"]),
+        current_date=date.today(),
+        days_remaining=meta["days_remaining"],
+        scheduling_days=meta["scheduling_days"],
+        hours_available_per_day=meta["hours_available_per_day"],
+        total_available_minutes=meta["total_available_minutes"],
+        prep_items=[],
+        allocations=[],
+        tasks=tasks,
+        notes=[],
+    )
 
-user_id = get_current_user_id()
-if user_id is None:
-    database_not_configured_notice()
-    st.stop()
 
-applications = tracking.list_applications_with_details(user_id)
-upcoming = sorted(
-    (a for a in applications if a.get("interview_date") and date.fromisoformat(a["interview_date"]) >= date.today()),
-    key=lambda a: a["interview_date"],
-)
-skill_rows = candidates_db.list_candidate_skills(user_id)
+def _demo_mark_task_complete(task_id: str, is_complete: bool) -> None:
+    for task in st.session_state["demo_prep_tasks"]:
+        if task["id"] == task_id:
+            task["is_complete"] = is_complete
 
-if not upcoming:
-    empty_state("No upcoming interview", detail="Set an interview date on the Applications page to see readiness here.")
-    st.stop()
 
-if not skill_rows:
-    empty_state("No candidate skills tracked yet", detail="Upload a resume to unlock readiness tracking.")
-    st.stop()
+def _demo_current_readiness() -> Any:
+    diagnostics = st.session_state["demo_prep_diagnostics"]
+    return calculate_readiness(_demo_profile(), _DEMO_ROLE_FAMILY, diagnostics)
 
-next_interview = upcoming[0]
-role = next_interview.get("roles") or {}
-st.subheader(f"Next up: {role.get('title', 'Unknown role')} at {role.get('company', 'Unknown company')}")
-st.caption(f"Interview on {next_interview['interview_date']}")
 
-profile = CandidateProfile(skills=_skills_from_rows(skill_rows))
-readiness = calculate_readiness(profile, role.get("role_family"))
+def _demo_submit_diagnostic(topic: str, observed_level: float, confidence: float) -> dict:
+    prev_diagnostics = st.session_state["demo_prep_diagnostics"]
+    profile = _demo_profile()
+    readiness_before = calculate_readiness(profile, _DEMO_ROLE_FAMILY, prev_diagnostics)
 
-with st.container(border=True):
-    _render_readiness(readiness)
+    previous_plan = _demo_plain_plan()
+    new_diagnostic = DiagnosticResult(topic=topic, observed_level=observed_level, confidence=confidence)
+    revised = revise_study_plan(
+        previous_plan, new_diagnostic, profile, _DEMO_ROLE_FAMILY, _DEMO_REQUIREMENTS, date.today(), prev_diagnostics
+    )
 
-st.subheader("📝 Prep plan")
-empty_state(
-    "Not enough data for a full prep plan yet",
-    detail="A minute-by-minute study plan needs extracted job requirements, which aren't persisted yet - see Skill Gaps.",
-)
+    st.session_state["demo_prep_diagnostics"] = [*prev_diagnostics, new_diagnostic]
+    st.session_state["demo_prep_meta"] = {
+        "interview_date": revised.interview_date.isoformat(),
+        "hours_available_per_day": revised.hours_available_per_day,
+        "days_remaining": revised.days_remaining,
+        "scheduling_days": revised.scheduling_days,
+        "total_available_minutes": revised.remaining_available_minutes,
+        "version": st.session_state["demo_prep_meta"]["version"] + 1,
+    }
+    all_tasks = [*revised.completed_tasks, *revised.new_tasks]
+    st.session_state["demo_prep_tasks"] = [
+        {**prep.task_to_row(t), "id": f"demo-task-{i}"} for i, t in enumerate(all_tasks)
+    ]
+
+    return {
+        "readiness_before": readiness_before,
+        "readiness_after": revised.readiness,
+        "message": prep.build_readiness_change_message(readiness_before, revised.readiness),
+    }
+
+
+# ---------------------------------------------------------------------
+# Shared rendering
+# ---------------------------------------------------------------------
+
+
+def _render_header(interview_date: str | None, days_remaining: int, hours_per_day: float, total_minutes: float, readiness) -> None:
+    cols = st.columns(4)
+    cols[0].metric("Interview date", interview_date or "—")
+    cols[1].metric("Days remaining", days_remaining)
+    cols[2].metric("Hours/day", f"{hours_per_day:g}")
+    cols[3].metric("Total prep time", f"{total_minutes / 60.0:.1f}h")
+    st.progress(min(readiness.overall_readiness / 100.0, 1.0), text=f"Current readiness: {readiness.overall_readiness:.1f}/100")
+    st.caption(
+        "Projected readiness after finishing the remaining plan isn't modeled yet - our deterministic model "
+        "only reports readiness as-measured. Submit a diagnostic below to see a real before/after comparison instead."
+    )
+
+
+def _render_topic_allocation(tasks: list[dict]) -> None:
+    st.subheader("📚 Topic Allocation")
+    if not tasks:
+        st.caption("No tasks scheduled.")
+        return
+    totals: dict[str, float] = {}
+    labels: dict[str, str] = {}
+    for task in tasks:
+        skill = task["normalized_skill_name"]
+        totals[skill] = totals.get(skill, 0.0) + (task.get("allocated_minutes") or 0.0)
+        labels[skill] = task.get("display_name") or skill
+    for skill, minutes in sorted(totals.items(), key=lambda kv: kv[1], reverse=True):
+        st.markdown(f"**{labels[skill]}** — {minutes / 60.0:.1f} hours")
+
+
+def _render_tasks(tasks: list[dict], on_toggle) -> None:
+    st.subheader("🗓️ Daily Study Tasks")
+    if not tasks:
+        st.caption("No tasks scheduled yet.")
+        return
+    by_day: dict[int, list[dict]] = {}
+    for task in tasks:
+        by_day.setdefault(task.get("day_index") or 0, []).append(task)
+
+    for day_index in sorted(by_day):
+        day_tasks = by_day[day_index]
+        day_label = day_tasks[0].get("scheduled_date") or f"Day {day_index + 1}"
+        st.markdown(f"**{day_label}**")
+        for task in day_tasks:
+            label = f"{task.get('display_name') or task['normalized_skill_name']} — {task.get('allocated_minutes', 0):.0f} min ({task.get('task_description') or ''})"
+            checked = st.checkbox(label, value=bool(task["is_complete"]), key=f"task_{task['id']}")
+            if checked != bool(task["is_complete"]):
+                on_toggle(task["id"], checked)
+                st.rerun()
+
+
+def _render_diagnostic_form(role_family: str | None, on_submit) -> None:
+    st.subheader("🧪 Enter a Diagnostic Result")
+    st.caption("Recording a real diagnostic replans your remaining (incomplete) schedule - completed tasks are never touched.")
+    topics = sorted(get_readiness_weights(role_family).keys())
+    with st.form("diagnostic_form", clear_on_submit=True):
+        topic = st.selectbox("Topic", options=topics, format_func=lambda t: t.replace("_", " ").title())
+        observed_level = st.slider("Observed level (0-10)", 0.0, 10.0, 5.0, 0.5)
+        confidence = st.slider("Confidence in this result", 0.0, 1.0, 0.9, 0.05)
+        submitted = st.form_submit_button("Submit diagnostic & replan")
+    if submitted:
+        on_submit(topic, observed_level, confidence)
+
+
+def _render_diagnostic_result(result: dict) -> None:
+    st.info(result["message"])
+    st.caption("This reflects the deterministic scoring model's before/after numbers only - not a claim about what specifically caused them.")
+    cols = st.columns(2)
+    before, after = result["before"], result["after"]
+    cols[0].metric("Overall readiness before", f"{before:.1f}")
+    cols[1].metric("Overall readiness after", f"{after:.1f}", delta=f"{after - before:+.1f}")
+
+
+# ---------------------------------------------------------------------
+# Render
+# ---------------------------------------------------------------------
+
+if is_demo_mode():
+    _init_demo_state()
+    st.caption("Demo scenario: Quantitative Research Intern at Meridian Capital.")
+
+    meta = st.session_state["demo_prep_meta"]
+    readiness = _demo_current_readiness()
+    _render_header(meta["interview_date"], meta["days_remaining"], meta["hours_available_per_day"], meta["total_available_minutes"], readiness)
+
+    st.divider()
+    _render_topic_allocation(st.session_state["demo_prep_tasks"])
+
+    st.divider()
+    _render_tasks(st.session_state["demo_prep_tasks"], _demo_mark_task_complete)
+
+    st.divider()
+
+    def _on_demo_submit(topic: str, observed_level: float, confidence: float) -> None:
+        result = _demo_submit_diagnostic(topic, observed_level, confidence)
+        st.session_state["demo_last_diagnostic"] = {
+            "message": result["message"],
+            "before": result["readiness_before"].overall_readiness,
+            "after": result["readiness_after"].overall_readiness,
+        }
+        st.rerun()
+
+    _render_diagnostic_form(_DEMO_ROLE_FAMILY, _on_demo_submit)
+
+    if "demo_last_diagnostic" in st.session_state:
+        _render_diagnostic_result(st.session_state["demo_last_diagnostic"])
+
+else:
+    user_id = get_current_user_id()
+    if user_id is None:
+        database_not_configured_notice()
+        st.stop()
+
+    applications = tracking.list_applications_with_details(user_id)
+    with_interview = [a for a in applications if a.get("interview_date")]
+    if not with_interview:
+        empty_state("No applications with an interview date yet", detail="Set an interview date on the Applications page first.")
+        st.stop()
+    with_interview.sort(key=lambda a: a["interview_date"])
+
+    options = {a["role_id"]: a for a in with_interview}
+    selected_role_id = st.selectbox(
+        "Select an application",
+        options=list(options.keys()),
+        format_func=lambda rid: (
+            f"{(options[rid].get('roles') or {}).get('title', 'Unknown role')} at "
+            f"{(options[rid].get('roles') or {}).get('company', 'Unknown company')} — interview {options[rid]['interview_date']}"
+        ),
+    )
+
+    role_row = discovery.get_role(selected_role_id)
+    role_family = role_row.get("role_family") if role_row else None
+
+    try:
+        plan = prep.get_or_create_plan_view(user_id, selected_role_id)
+    except ValueError as exc:
+        st.warning(str(exc))
+        st.stop()
+
+    readiness = prep.get_current_readiness(user_id, selected_role_id)
+
+    _render_header(plan["interview_date"], plan["days_remaining"], plan["hours_available_per_day"], plan["total_available_minutes"], readiness)
+
+    st.divider()
+    _render_topic_allocation(plan["tasks"])
+
+    st.divider()
+    _render_tasks(plan["tasks"], lambda task_id, checked: prep.mark_task_complete(task_id, checked))
+
+    st.divider()
+
+    result_key = f"last_diagnostic_{selected_role_id}"
+
+    def _on_submit(topic: str, observed_level: float, confidence: float) -> None:
+        result = prep.submit_diagnostic(user_id, selected_role_id, topic, observed_level, confidence)
+        st.session_state[result_key] = {
+            "message": result["message"],
+            "before": result["readiness_before"].overall_readiness,
+            "after": result["readiness_after"].overall_readiness,
+        }
+        st.rerun()
+
+    _render_diagnostic_form(role_family, _on_submit)
+
+    if result_key in st.session_state:
+        _render_diagnostic_result(st.session_state[result_key])
