@@ -6,7 +6,14 @@ these run fast while still exercising real time.sleep()-based I/O.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
+import pytest
+
+from backend.ingestion import jobs as jobs_module
 from backend.ingestion.jobs import (
+    AdzunaNotConfiguredError,
+    AdzunaSourceAdapter,
     DemoAPISourceAdapter,
     DemoBoardSourceAdapter,
     DemoUnreliableSourceAdapter,
@@ -15,6 +22,7 @@ from backend.ingestion.jobs import (
     fetch_and_normalize_source,
 )
 from backend.ingestion.normalize import Role
+from backend.utils.config import get_settings
 
 
 def test_source_adapter_is_abstract() -> None:
@@ -58,6 +66,133 @@ def test_demo_unreliable_adapter_succeeds_when_not_configured_to_fail() -> None:
     raw_jobs = adapter.fetch_raw_jobs()
 
     assert len(raw_jobs) == 1
+
+
+# ---------------------------------------------------------------------
+# AdzunaSourceAdapter
+# ---------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _clear_settings_cache():
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
+
+def _fake_adzuna_response(results: list[dict]) -> SimpleNamespace:
+    return SimpleNamespace(
+        raise_for_status=lambda: None,
+        json=lambda: {"results": results},
+    )
+
+
+def test_adzuna_adapter_raises_when_not_configured(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ADZUNA_APP_ID", raising=False)
+    monkeypatch.delenv("ADZUNA_APP_KEY", raising=False)
+    adapter = AdzunaSourceAdapter()
+
+    with pytest.raises(AdzunaNotConfiguredError):
+        adapter.fetch_raw_jobs()
+
+
+def test_adzuna_adapter_flattens_nested_company_and_location(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ADZUNA_APP_ID", "test-id")
+    monkeypatch.setenv("ADZUNA_APP_KEY", "test-key")
+    captured = {}
+
+    def fake_get(url, params, timeout):
+        captured["url"] = url
+        captured["params"] = params
+        return _fake_adzuna_response(
+            [
+                {
+                    "id": 123,
+                    "title": "Software Engineer Intern",
+                    "company": {"display_name": "Acme Corp"},
+                    "location": {"display_name": "New York, NY"},
+                    "description": "Build things.",
+                    "redirect_url": "https://adzuna.example/jobs/123",
+                }
+            ]
+        )
+
+    monkeypatch.setattr(jobs_module.httpx, "get", fake_get)
+
+    raw_jobs = AdzunaSourceAdapter().fetch_raw_jobs()
+
+    assert raw_jobs == [
+        {
+            "external_id": "123",
+            "title": "Software Engineer Intern",
+            "company": "Acme Corp",
+            "location": "New York, NY",
+            "description": "Build things.",
+            "url": "https://adzuna.example/jobs/123",
+        }
+    ]
+    assert captured["params"]["app_id"] == "test-id"
+    assert captured["params"]["app_key"] == "test-key"
+
+
+def test_adzuna_adapter_normalizes_into_a_valid_role(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The flattened dict this adapter produces must be exactly what normalize_role() already expects - no downstream changes needed."""
+    monkeypatch.setenv("ADZUNA_APP_ID", "test-id")
+    monkeypatch.setenv("ADZUNA_APP_KEY", "test-key")
+    monkeypatch.setattr(
+        jobs_module.httpx, "get",
+        lambda url, params, timeout: _fake_adzuna_response(
+            [{"id": 1, "title": "Data Intern", "company": {"display_name": "Acme"}, "location": {"display_name": "Remote"}, "description": "x", "redirect_url": "https://x"}]
+        ),
+    )
+
+    roles, malformed = fetch_and_normalize_source(AdzunaSourceAdapter())
+
+    assert malformed == []
+    assert len(roles) == 1
+    assert isinstance(roles[0], Role)
+    assert roles[0].title == "Data Intern"
+    assert roles[0].company == "Acme"
+
+
+def test_adzuna_adapter_handles_missing_id_gracefully(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ADZUNA_APP_ID", "test-id")
+    monkeypatch.setenv("ADZUNA_APP_KEY", "test-key")
+    monkeypatch.setattr(
+        jobs_module.httpx, "get",
+        lambda url, params, timeout: _fake_adzuna_response(
+            [{"title": "Intern", "company": {"display_name": "Acme"}, "location": {}, "description": None, "redirect_url": None}]
+        ),
+    )
+
+    [raw_job] = AdzunaSourceAdapter().fetch_raw_jobs()
+
+    assert raw_job["external_id"] is None  # falls back to a derived external_id in normalize_role()
+    assert raw_job["location"] is None
+
+
+def test_adzuna_adapter_empty_results_returns_empty_list(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ADZUNA_APP_ID", "test-id")
+    monkeypatch.setenv("ADZUNA_APP_KEY", "test-key")
+    monkeypatch.setattr(jobs_module.httpx, "get", lambda url, params, timeout: _fake_adzuna_response([]))
+
+    assert AdzunaSourceAdapter().fetch_raw_jobs() == []
+
+
+def test_adzuna_adapter_propagates_http_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ADZUNA_APP_ID", "test-id")
+    monkeypatch.setenv("ADZUNA_APP_KEY", "test-key")
+
+    def _raise_for_status():
+        raise jobs_module.httpx.HTTPStatusError("boom", request=None, response=None)
+
+    monkeypatch.setattr(
+        jobs_module.httpx, "get",
+        lambda url, params, timeout: SimpleNamespace(raise_for_status=_raise_for_status, json=lambda: {}),
+    )
+
+    with pytest.raises(jobs_module.httpx.HTTPStatusError):
+        AdzunaSourceAdapter().fetch_raw_jobs()
 
 
 # ---------------------------------------------------------------------

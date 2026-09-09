@@ -7,11 +7,16 @@ integration) can be added later by writing one class - nothing in
 backend.ingestion.concurrent, backend.ingestion.deduplicate, or
 downstream normalization/persistence needs to change.
 
-The three adapters here are deliberately mock/demo sources rather than
+The three Demo* adapters are deliberately mock sources rather than
 scrapers of any real site (fragile, and outside this project's scope).
 Each simulates I/O with a fixed time.sleep() - not random - so local
 concurrency benchmarking and tests are fully reproducible while still
 genuinely spending wall-clock time the way a real HTTP call would.
+
+AdzunaSourceAdapter is this project's one REAL source: it calls the
+public Adzuna job search API (https://developer.adzuna.com/) over HTTP.
+Everything downstream (normalize/dedupe/filter/persist) treats it
+exactly like any other adapter - it just happens to return real data.
 """
 
 from __future__ import annotations
@@ -21,11 +26,17 @@ import time
 from abc import ABC, abstractmethod
 from typing import Any
 
+import httpx
 from pydantic import BaseModel
 
 from backend.ingestion.normalize import Role, normalize_role
+from backend.utils.config import get_settings
 
 logger = logging.getLogger(__name__)
+
+
+class AdzunaNotConfiguredError(RuntimeError):
+    """Raised when ADZUNA_APP_ID / ADZUNA_APP_KEY are not set."""
 
 
 class SourceAdapter(ABC):
@@ -132,6 +143,75 @@ class DemoUnreliableSourceAdapter(SourceAdapter):
                 "description": "General backend work.",
             }
         ]
+
+
+class AdzunaSourceAdapter(SourceAdapter):
+    """
+    Real job postings from the Adzuna job search API. Requires
+    ADZUNA_APP_ID and ADZUNA_APP_KEY (backend.utils.config) -
+    fetch_raw_jobs() raises AdzunaNotConfiguredError, not a crash, when
+    they're missing, the same pattern backend.db.client.get_client() /
+    backend.llm.client.get_openai_client() / backend.rag.vector_store.get_qdrant_client()
+    use for their own credentials.
+
+    Adzuna's response nests company/location under their own display_name
+    field (`{"company": {"display_name": "Acme"}}`) - that reshaping into
+    the flat, canonical-key-friendly dict normalize_role() expects
+    happens HERE, in the adapter, per SourceAdapter's docstring ("get the
+    data" is this class's job); normalize_role() itself is untouched.
+    """
+
+    name = "adzuna"
+
+    def __init__(
+        self,
+        country: str = "us",
+        what: str = "software engineer intern",
+        results_per_page: int = 20,
+        page: int = 1,
+        timeout_seconds: float = 10.0,
+    ):
+        self._country = country
+        self._what = what
+        self._results_per_page = results_per_page
+        self._page = page
+        self._timeout_seconds = timeout_seconds
+
+    def fetch_raw_jobs(self) -> list[dict[str, Any]]:
+        settings = get_settings()
+        if not settings.adzuna_app_id or not settings.adzuna_app_key:
+            raise AdzunaNotConfiguredError(
+                "ADZUNA_APP_ID and ADZUNA_APP_KEY must be set to fetch from Adzuna. See .env.example."
+            )
+
+        url = f"https://api.adzuna.com/v1/api/jobs/{self._country}/search/{self._page}"
+        response = httpx.get(
+            url,
+            params={
+                "app_id": settings.adzuna_app_id,
+                "app_key": settings.adzuna_app_key,
+                "results_per_page": self._results_per_page,
+                "what": self._what,
+                "content-type": "application/json",
+            },
+            timeout=self._timeout_seconds,
+        )
+        response.raise_for_status()
+        payload = response.json()
+
+        raw_jobs: list[dict[str, Any]] = []
+        for result in payload.get("results", []):
+            raw_jobs.append(
+                {
+                    "external_id": str(result["id"]) if result.get("id") else None,
+                    "title": result.get("title"),
+                    "company": (result.get("company") or {}).get("display_name"),
+                    "location": (result.get("location") or {}).get("display_name"),
+                    "description": result.get("description"),
+                    "url": result.get("redirect_url"),
+                }
+            )
+        return raw_jobs
 
 
 class MalformedRecordError(BaseModel):

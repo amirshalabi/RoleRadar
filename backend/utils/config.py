@@ -6,8 +6,8 @@ a single typed Settings object via get_settings(). Other modules should
 read configuration through get_settings() rather than calling os.getenv
 directly, so required variables are defined and validated in one place.
 
-No external services (OpenAI, Supabase, Qdrant) are called from here -
-this module only loads and types configuration values.
+No external services (OpenAI, Supabase, Qdrant, Adzuna) are called from
+here - this module only loads and types configuration values.
 """
 
 from __future__ import annotations
@@ -31,6 +31,8 @@ class Settings(BaseModel):
     supabase_key: str | None = None
     qdrant_url: str | None = None
     qdrant_api_key: str | None = None
+    adzuna_app_id: str | None = None
+    adzuna_app_key: str | None = None
     log_level: str = "INFO"
 
 
@@ -45,5 +47,7 @@ def get_settings() -> Settings:
         supabase_key=os.getenv("SUPABASE_KEY"),
         qdrant_url=os.getenv("QDRANT_URL"),
         qdrant_api_key=os.getenv("QDRANT_API_KEY"),
+        adzuna_app_id=os.getenv("ADZUNA_APP_ID"),
+        adzuna_app_key=os.getenv("ADZUNA_APP_KEY"),
         log_level=os.getenv("LOG_LEVEL", "INFO"),
     )
