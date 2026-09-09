@@ -12,7 +12,7 @@ import time
 
 import pytest
 
-from backend.db.client import SupabaseNotConfiguredError
+from backend.db.client import SupabaseNotConfiguredError, get_client
 from backend.ingestion import concurrent as concurrent_module
 from backend.ingestion.concurrent import (
     concurrent_ingest,
@@ -20,6 +20,7 @@ from backend.ingestion.concurrent import (
     serial_ingest,
 )
 from backend.ingestion.jobs import SourceAdapter
+from backend.utils.config import get_settings
 
 
 class _FixedAdapter(SourceAdapter):
@@ -242,14 +243,29 @@ def test_pipeline_upsert_false_skips_persistence_with_reason() -> None:
     assert result.upsert_skipped_reason == "upsert=False; persistence skipped."
 
 
-def test_pipeline_upsert_gracefully_skips_without_credentials() -> None:
-    adapters = [_FixedAdapter("a")]
+def test_pipeline_upsert_gracefully_skips_without_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    """
+    Simulates missing Supabase credentials by clearing the env vars and
+    the get_settings()/get_client() lru_caches - not by relying on the
+    ambient environment actually lacking real credentials, since a
+    developer's .env may have live ones configured (in which case this
+    test would otherwise silently write a real row into their database).
+    """
+    monkeypatch.delenv("SUPABASE_URL", raising=False)
+    monkeypatch.delenv("SUPABASE_KEY", raising=False)
+    get_settings.cache_clear()
+    get_client.cache_clear()
+    try:
+        adapters = [_FixedAdapter("a")]
 
-    result = run_ingestion_pipeline(adapters, per_source_timeout=5.0, upsert=True)
+        result = run_ingestion_pipeline(adapters, per_source_timeout=5.0, upsert=True)
 
-    assert result.upserted_count == 0
-    assert result.upsert_skipped_reason is not None
-    assert "SUPABASE_URL" in result.upsert_skipped_reason
+        assert result.upserted_count == 0
+        assert result.upsert_skipped_reason is not None
+        assert "SUPABASE_URL" in result.upsert_skipped_reason
+    finally:
+        get_settings.cache_clear()
+        get_client.cache_clear()
 
 
 def test_pipeline_calls_upsert_role_once_per_unique_role(monkeypatch: pytest.MonkeyPatch) -> None:

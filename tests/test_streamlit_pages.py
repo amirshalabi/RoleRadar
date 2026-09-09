@@ -75,15 +75,26 @@ def test_interview_prep_page_empty_state_when_no_interview_scheduled(fake_client
 
 
 def test_discover_page_shows_database_not_configured_notice_without_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
-    """No fake client patched in at all - simulates SUPABASE_URL/KEY genuinely unset."""
+    """
+    No fake client patched in at all - simulates SUPABASE_URL/KEY
+    genuinely unset. Also clears get_client()'s own lru_cache (not just
+    get_settings()'s), since a real client built by an earlier test
+    would otherwise still be cached for the rest of the process even
+    after the env vars are cleared here.
+    """
     monkeypatch.delenv("SUPABASE_URL", raising=False)
     monkeypatch.delenv("SUPABASE_KEY", raising=False)
+    from backend.db.client import get_client
     from backend.utils.config import get_settings
 
     get_settings.cache_clear()
+    get_client.cache_clear()
 
-    at = AppTest.from_file(str(_PAGES_DIR / "1_Discover.py")).run(timeout=30)
+    try:
+        at = AppTest.from_file(str(_PAGES_DIR / "1_Discover.py")).run(timeout=30)
 
-    assert not at.exception
-    assert any("Database not connected" in w.value for w in at.warning)
-    get_settings.cache_clear()
+        assert not at.exception
+        assert any("Database not connected" in w.value for w in at.warning)
+    finally:
+        get_settings.cache_clear()
+        get_client.cache_clear()

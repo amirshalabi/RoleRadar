@@ -16,8 +16,10 @@ from backend.db import candidates as candidates_db
 from backend.db import favorites as favorites_db
 from backend.db import metrics as metrics_db
 from backend.db import roles as roles_db
+from backend.db.client import get_client
 from backend.services import dashboard
 from backend.services import tracking
+from backend.utils.config import get_settings
 from backend.utils.metrics import PipelineMetrics
 from tests._fake_supabase import FakeSupabaseClient
 
@@ -184,12 +186,26 @@ def test_build_pipeline_stats_handles_missing_fields_as_zero() -> None:
 # ---------------------------------------------------------------------
 
 
-def test_build_dashboard_data_without_credentials_reports_disconnected() -> None:
-    result = dashboard.build_dashboard_data("some-user")
+def test_build_dashboard_data_without_credentials_reports_disconnected(monkeypatch: pytest.MonkeyPatch) -> None:
+    """
+    Simulates missing Supabase credentials by clearing the env vars and
+    the get_settings()/get_client() lru_caches - not by relying on the
+    ambient environment actually lacking real credentials, since a
+    developer's .env may have live ones configured.
+    """
+    monkeypatch.delenv("SUPABASE_URL", raising=False)
+    monkeypatch.delenv("SUPABASE_KEY", raising=False)
+    get_settings.cache_clear()
+    get_client.cache_clear()
+    try:
+        result = dashboard.build_dashboard_data("some-user")
 
-    assert result.database_connected is False
-    assert result.profile_status.has_profile is False
-    assert result.top_match is None
+        assert result.database_connected is False
+        assert result.profile_status.has_profile is False
+        assert result.top_match is None
+    finally:
+        get_settings.cache_clear()
+        get_client.cache_clear()
 
 
 def test_build_dashboard_data_empty_account_shows_empty_states(fake_client: FakeSupabaseClient) -> None:
