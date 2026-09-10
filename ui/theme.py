@@ -446,6 +446,32 @@ hr {{ border-color: var(--rr-border); }}
 .rr-bar-fill.tone-positive {{ background: var(--rr-positive); }}
 .rr-bar-fill.tone-negative {{ background: var(--rr-negative); }}
 
+/* ---- Role / job title (plain, or a real external link when a source URL is known) ---- */
+.rr-role-title {{
+    font-family: var(--rr-font-sans);
+    font-weight: 600;
+    font-size: 1rem;
+    color: var(--rr-text);
+    line-height: 1.3;
+}}
+a.rr-role-title-link, a.rr-role-title-link:link, a.rr-role-title-link:visited {{
+    color: var(--rr-text) !important;
+    text-decoration: none;
+    cursor: pointer;
+    transition: color 120ms ease;
+}}
+a.rr-role-title-link:hover, a.rr-role-title-link:focus-visible {{
+    color: var(--rr-gold-bright) !important;
+    text-decoration: underline;
+    text-underline-offset: 3px;
+}}
+.rr-role-title-arrow {{
+    font-size: 0.82em;
+    color: var(--rr-text-muted);
+    transition: color 120ms ease;
+}}
+a.rr-role-title-link:hover .rr-role-title-arrow {{ color: var(--rr-gold-bright); }}
+
 /* ---- Meta / caption line (monospace metadata) ---- */
 .rr-meta {{
     font-family: var(--rr-font-mono);

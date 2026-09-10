@@ -115,6 +115,25 @@ def test_card_defaults_when_not_saved_or_tracked(fake_client: FakeSupabaseClient
     assert card.application_status is None
 
 
+def test_card_url_reflects_persisted_role_url(fake_client: FakeSupabaseClient) -> None:
+    roles_db.upsert_role(
+        company="Meridian Capital", title="Quant Research Intern",
+        url="https://boards.example.com/jobs/123",
+    )
+
+    [card] = discovery.list_role_cards("u1")
+
+    assert card.url == "https://boards.example.com/jobs/123"
+
+
+def test_card_url_is_none_when_role_has_no_url(fake_client: FakeSupabaseClient) -> None:
+    _seed_role()
+
+    [card] = discovery.list_role_cards("u1")
+
+    assert card.url is None
+
+
 # ---------------------------------------------------------------------
 # analyze_role
 # ---------------------------------------------------------------------

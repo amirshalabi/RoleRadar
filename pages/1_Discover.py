@@ -171,7 +171,7 @@ def _render_card(card: RoleCard) -> None:
         with header_cols[0]:
             components.render_score_badge(card.fit_score)
         with header_cols[1]:
-            st.markdown(f"**{card.title}**")
+            components.render_role_title(card.title, card.url)
             components.render_meta_line([card.company])
 
         meta_bits = []
@@ -197,7 +197,7 @@ def _render_card(card: RoleCard) -> None:
         if card.top_gap:
             components.render_tags([card.top_gap], kind="gap")
 
-        action_cols = st.columns(2)
+        action_cols = st.columns(3)
         with action_cols[0]:
             if is_demo_mode():
                 st.button("Saved" if card.is_saved else "Save", key=f"save_{card.role_id}", disabled=True, use_container_width=True)
@@ -210,6 +210,8 @@ def _render_card(card: RoleCard) -> None:
                     tracking.save_role(user_id, card.role_id)
                     st.rerun()
         with action_cols[1]:
+            components.render_view_posting_button(card.url, key=f"posting_{card.role_id}")
+        with action_cols[2]:
             if st.button("View Analysis", key=f"detail_{card.role_id}", type="primary", use_container_width=True):
                 st.session_state["selected_role_id"] = card.role_id
                 st.switch_page("pages/7_Role_Analysis.py")

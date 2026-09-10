@@ -96,6 +96,7 @@ class RoleCard(BaseModel):
     location: str | None = None
     role_family: str | None = None
     description: str | None = None
+    url: str | None = None
 
     is_saved: bool = False
     priority: str | None = None
@@ -224,6 +225,7 @@ def list_role_cards(user_id: str) -> list[RoleCard]:
                 location=role_row.get("location"),
                 role_family=role_row.get("role_family"),
                 description=role_row.get("description"),
+                url=role_row.get("url"),
                 is_saved=favorite is not None,
                 priority=favorite["priority"] if favorite else None,
                 notes=favorite.get("notes") if favorite else None,

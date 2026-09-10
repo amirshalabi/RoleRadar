@@ -121,7 +121,7 @@ for card in cards:
     with components.card(f"fav-{card.role_id}"):
         header_cols = st.columns([4, 1])
         with header_cols[0]:
-            st.markdown(f"**{card.title}**")
+            components.render_role_title(card.title, card.url)
             meta_bits = [card.company]
             if card.location:
                 meta_bits.append(card.location)
@@ -143,9 +143,14 @@ for card in cards:
             st.markdown('<p class="rr-metric-label">Deadline</p>', unsafe_allow_html=True)
             st.markdown(f'<span class="rr-meta">{card.deadline or "—"}</span>', unsafe_allow_html=True)
 
-        if st.button("View Full Analysis", key=f"analysis_{card.role_id}", type="primary"):
-            st.session_state["selected_role_id"] = card.role_id
-            st.switch_page("pages/7_Role_Analysis.py")
+        action_cols = st.columns([1, 1]) if card.url else st.columns([1])
+        with action_cols[0]:
+            if st.button("View Full Analysis", key=f"analysis_{card.role_id}", type="primary", use_container_width=True):
+                st.session_state["selected_role_id"] = card.role_id
+                st.switch_page("pages/7_Role_Analysis.py")
+        if card.url:
+            with action_cols[1]:
+                components.render_view_posting_button(card.url, key=f"posting_{card.role_id}")
 
         if demo:
             if card.notes:

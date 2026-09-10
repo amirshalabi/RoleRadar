@@ -52,6 +52,38 @@ def render_page_header(eyebrow: str, title: str, subtitle: str | None = None) ->
     st.markdown("".join(parts), unsafe_allow_html=True)
 
 
+def role_title_html(title: str, url: str | None = None, *, tag: str = "span") -> str:
+    """
+    A role/job title - a plain <span> when there's no known source URL
+    for it, or a real <a target="_blank"> with an external-link glyph
+    when there is. `url` must be a real, persisted posting URL (from
+    roles.url via RoleCard.url) - never invented here. `tag` controls
+    the wrapping element's base size class ("span" for inline card
+    titles, "h1" for a page-header-sized title use render_role_title's
+    `size` instead).
+    """
+    escaped_title = _esc(title)
+    if not url:
+        return f'<span class="rr-role-title">{escaped_title}</span>'
+    escaped_url = _esc(url)
+    return (
+        f'<a class="rr-role-title rr-role-title-link" href="{escaped_url}" '
+        f'target="_blank" rel="noopener noreferrer">{escaped_title} '
+        f'<span class="rr-role-title-arrow">↗</span></a>'
+    )
+
+
+def render_role_title(title: str, url: str | None = None) -> None:
+    st.markdown(role_title_html(title, url), unsafe_allow_html=True)
+
+
+def render_view_posting_button(url: str | None, *, key: str) -> None:
+    """A link button that opens the original job posting in a new tab. Renders nothing when there's no url - never a broken/fake link."""
+    if not url:
+        return
+    st.link_button("View Posting ↗", url, key=key, use_container_width=True)
+
+
 def render_section_header(title: str, subtitle: str | None = None) -> None:
     parts = ['<div class="rr-section-header">', f"<h2>{_esc(title)}</h2>"]
     if subtitle:

@@ -104,6 +104,7 @@ else:
                 "fit_score": card.fit_score if card else None,
                 "readiness_score": card.readiness_score if card else None,
                 "priority": card.priority if card else None,
+                "url": card.url if card else None,
             }
         )
 
@@ -232,7 +233,7 @@ def _render_application(application: dict) -> None:
     with components.card(f"app-{application['role_id']}"):
         header_cols = st.columns([3, 1])
         with header_cols[0]:
-            st.markdown(f"**{application['title']}**")
+            components.render_role_title(application["title"], application.get("url"))
             components.render_meta_line([application["company"]])
         with header_cols[1]:
             components.render_status_badge(
