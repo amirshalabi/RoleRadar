@@ -46,6 +46,7 @@ class FakeQdrantClient:
         self.upserted: list[tuple[str, list]] = []
         self.queries: list[dict] = []
         self.deletes: list[dict] = []
+        self.created_indexes: list[tuple[str, str]] = []
         self._query_points = query_points or []
 
     def collection_exists(self, name: str) -> bool:
@@ -73,6 +74,10 @@ class FakeQdrantClient:
 
     def delete(self, collection_name: str, points_selector, **kwargs):
         self.deletes.append({"collection_name": collection_name, "points_selector": points_selector})
+        return SimpleNamespace(status="completed")
+
+    def create_payload_index(self, collection_name: str, field_name: str, field_schema=None, **kwargs):
+        self.created_indexes.append((collection_name, field_name))
         return SimpleNamespace(status="completed")
 
 
@@ -109,6 +114,26 @@ def test_ensure_collection_skips_when_already_exists(monkeypatch: pytest.MonkeyP
     ensure_collection("my_collection", 1536)
 
     assert fake_client.created_collections == []
+
+
+def test_ensure_collection_creates_payload_indexes_for_filtered_fields(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake_client = FakeQdrantClient(existing_collections=set())
+    monkeypatch.setattr("backend.rag.vector_store.get_qdrant_client", lambda: fake_client)
+
+    ensure_collection("my_collection", 1536)
+
+    indexed_fields = {field for _, field in fake_client.created_indexes}
+    assert indexed_fields == {"user_id", "role_id", "skill"}
+
+
+def test_ensure_collection_creates_payload_indexes_even_for_a_preexisting_collection(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A collection created before payload indexes existed self-heals the next time anything ensures it, rather than staying permanently unfilterable."""
+    fake_client = FakeQdrantClient(existing_collections={"my_collection"})
+    monkeypatch.setattr("backend.rag.vector_store.get_qdrant_client", lambda: fake_client)
+
+    ensure_collection("my_collection", 1536)
+
+    assert len(fake_client.created_indexes) == 3
 
 
 def test_generate_point_id_is_deterministic() -> None:

@@ -166,8 +166,8 @@ with left:
 
     components.render_section_header("Urgent Applications")
     if data.urgent_applications:
-        for application in data.urgent_applications:
-            with components.card(f"urgent-{application.role_title}-{application.company}"):
+        for index, application in enumerate(data.urgent_applications):
+            with components.card(f"urgent-{index}"):
                 cols = st.columns([3, 1, 1])
                 cols[0].markdown(f"**{application.role_title}**")
                 components.render_meta_line([application.company])

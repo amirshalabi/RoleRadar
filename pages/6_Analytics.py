@@ -209,8 +209,8 @@ else:
         components.render_empty_state("No timing data for this run", detail="This run didn't record serial/concurrent timing.")
 
     with st.expander("Run history"):
-        for run in runs:
-            with components.panel(f"run-{run.get('finished_at', id(run))}"):
+        for index, run in enumerate(runs):
+            with components.panel(f"run-{index}"):
                 components.render_meta_line([run.get("finished_at", "unknown time")])
                 run_metrics = PipelineMetrics(
                     ingested=run.get("jobs_ingested") or 0, deduplicated=run.get("jobs_deduplicated") or 0,

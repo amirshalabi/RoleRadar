@@ -186,8 +186,8 @@ def _render_sections(profile: CandidateProfile) -> None:
     components.divider()
     components.render_section_header("Education")
     if profile.education:
-        for entry in profile.education:
-            with components.panel(f"edu-{entry.institution}"):
+        for index, entry in enumerate(profile.education):
+            with components.panel(f"edu-{index}"):
                 st.markdown(f"**{entry.institution}**")
                 components.render_meta_line([entry.degree, entry.major, str(entry.graduation_year) if entry.graduation_year else None])
     else:
@@ -195,8 +195,8 @@ def _render_sections(profile: CandidateProfile) -> None:
 
     components.render_section_header("Experience")
     if profile.internships:
-        for entry in profile.internships:
-            with components.panel(f"exp-{entry.organization}-{entry.role}"):
+        for index, entry in enumerate(profile.internships):
+            with components.panel(f"exp-{index}"):
                 st.markdown(f"**{entry.role}** · {entry.organization}")
                 components.render_meta_line([entry.start_date, entry.end_date])
                 st.caption(entry.description)
@@ -205,8 +205,8 @@ def _render_sections(profile: CandidateProfile) -> None:
 
     components.render_section_header("Projects")
     if profile.projects:
-        for entry in profile.projects:
-            with components.panel(f"proj-{entry.name}"):
+        for index, entry in enumerate(profile.projects):
+            with components.panel(f"proj-{index}"):
                 st.markdown(f"**{entry.name}**")
                 st.caption(entry.description)
                 if entry.technologies:
@@ -222,8 +222,8 @@ def _render_sections(profile: CandidateProfile) -> None:
 
     components.render_section_header("Research")
     if profile.research:
-        for entry in profile.research:
-            with components.panel(f"research-{entry.title}"):
+        for index, entry in enumerate(profile.research):
+            with components.panel(f"research-{index}"):
                 st.markdown(f"**{entry.title}**")
                 st.caption(entry.description)
     else:

@@ -47,7 +47,7 @@ from typing import Any
 from pydantic import BaseModel
 from qdrant_client import QdrantClient
 from qdrant_client.http.exceptions import UnexpectedResponse
-from qdrant_client.models import Distance, FieldCondition, Filter, MatchValue, PointStruct, VectorParams
+from qdrant_client.models import Distance, FieldCondition, Filter, MatchValue, PayloadSchemaType, PointStruct, VectorParams
 
 from backend.rag.chunking import EvidenceChunk
 from backend.rag.embeddings import EmbeddingProvider
@@ -88,16 +88,36 @@ def get_qdrant_client() -> QdrantClient:
     return QdrantClient(url=settings.qdrant_url, api_key=settings.qdrant_api_key)
 
 
+# Payload fields every retrieval call in backend/rag/retrieval.py filters
+# on (user_id/role_id/skill - see retrieve_candidate_evidence(),
+# retrieve_role_content(), retrieve_skill_evidence()). Qdrant requires an
+# explicit index on a field before it can be used in a query_filter -
+# without one, a filtered query_points() call raises a 400 "Index
+# required but not found" error, not just "no results."
+_FILTERED_PAYLOAD_FIELDS = ("user_id", "role_id", "skill")
+
+
 def ensure_collection(collection_name: str, vector_size: int) -> None:
-    """Create `collection_name` with cosine-distance vectors of `vector_size` if it doesn't already exist."""
+    """
+    Create `collection_name` with cosine-distance vectors of
+    `vector_size` if it doesn't already exist, and ensure it has payload
+    indexes on every field this module's callers ever filter by.
+
+    The index step runs even for an already-existing collection (not
+    just on first creation) so a collection created before these indexes
+    existed self-heals the next time anything upserts into it, rather
+    than staying permanently unfilterable - create_payload_index() is
+    idempotent, safe to call again for a field that's already indexed.
+    """
     client = get_qdrant_client()
-    if client.collection_exists(collection_name):
-        return
-    logger.info("Creating Qdrant collection '%s' (size=%d)", collection_name, vector_size)
-    client.create_collection(
-        collection_name=collection_name,
-        vectors_config=VectorParams(size=vector_size, distance=Distance.COSINE),
-    )
+    if not client.collection_exists(collection_name):
+        logger.info("Creating Qdrant collection '%s' (size=%d)", collection_name, vector_size)
+        client.create_collection(
+            collection_name=collection_name,
+            vectors_config=VectorParams(size=vector_size, distance=Distance.COSINE),
+        )
+    for field_name in _FILTERED_PAYLOAD_FIELDS:
+        client.create_payload_index(collection_name, field_name, field_schema=PayloadSchemaType.KEYWORD)
 
 
 def generate_point_id(*parts: str) -> str:
