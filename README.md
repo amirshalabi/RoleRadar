@@ -73,7 +73,7 @@ The engineering thesis, repeated everywhere in the codebase: **Python decides, t
 
 Two front ends sit on top of the same `backend/services/*` layer and never contain business logic themselves:
 
-- **Streamlit app** (`app.py` + `pages/`) — the primary UI: Discover, Favorites, Applications, Skill Gaps, Interview Prep, Analytics, Role Analysis.
+- **Streamlit app** (`Dashboard.py` + `pages/`) — the primary UI: Discover, Favorites, Applications, Skill Gaps, Interview Prep, Analytics, Role Analysis.
 - **FastAPI app** (`backend/main.py` + `backend/api/`) — a REST surface over the same services (candidate parsing, roles, favorites, applications, plans, assessments, analytics), for programmatic or future non-Streamlit clients.
 
 ```
@@ -197,7 +197,7 @@ cp .env.example .env   # fill in your own credentials
 Streamlit app:
 
 ```bash
-streamlit run app.py
+streamlit run Dashboard.py
 ```
 
 FastAPI app:

@@ -29,12 +29,15 @@ from backend.planning.adaptive import revise_study_plan
 from backend.planning.readiness import DiagnosticResult, calculate_readiness, get_readiness_weights
 from backend.planning.scheduler import StudyPlan, generate_study_plan
 from backend.services import discovery, prep, tracking
-from ui_common import configure_page, database_not_configured_notice, empty_state, get_current_user_id, is_demo_mode
+from ui import components
+from ui_common import configure_page, database_not_configured_notice, get_current_user_id, is_demo_mode
 
 configure_page("Interview Prep", icon="🧠")
-st.title("🧠 Interview Prep")
-st.caption("A persisted, diagnostic-adaptive study plan for one tracked application.")
-st.divider()
+components.render_page_header(
+    "Prep Terminal",
+    "Interview Readiness",
+    "A persisted, diagnostic-adaptive study plan for one tracked application.",
+)
 
 
 # ---------------------------------------------------------------------
@@ -151,12 +154,15 @@ def _demo_submit_diagnostic(topic: str, observed_level: float, confidence: float
 
 
 def _render_header(interview_date: str | None, days_remaining: int, hours_per_day: float, total_minutes: float, readiness) -> None:
-    cols = st.columns(4)
-    cols[0].metric("Interview date", interview_date or "—")
-    cols[1].metric("Days remaining", days_remaining)
-    cols[2].metric("Hours/day", f"{hours_per_day:g}")
-    cols[3].metric("Total prep time", f"{total_minutes / 60.0:.1f}h")
-    st.progress(min(readiness.overall_readiness / 100.0, 1.0), text=f"Current readiness: {readiness.overall_readiness:.1f}/100")
+    components.render_metric_strip(
+        [
+            {"label": "Interview Date", "value": interview_date or "—"},
+            {"label": "Days Remaining", "value": str(days_remaining)},
+            {"label": "Hours / Day", "value": f"{hours_per_day:g}"},
+            {"label": "Total Prep Time", "value": f"{total_minutes / 60.0:.1f}h"},
+            {"label": "Readiness", "value": f"{readiness.overall_readiness:.1f}", "tone": "gold"},
+        ]
+    )
     st.caption(
         "Projected readiness after finishing the remaining plan isn't modeled yet - our deterministic model "
         "only reports readiness as-measured. Submit a diagnostic below to see a real before/after comparison instead."
@@ -164,7 +170,7 @@ def _render_header(interview_date: str | None, days_remaining: int, hours_per_da
 
 
 def _render_topic_allocation(tasks: list[dict]) -> None:
-    st.subheader("📚 Topic Allocation")
+    components.render_section_header("Topic Allocation")
     if not tasks:
         st.caption("No tasks scheduled.")
         return
@@ -174,12 +180,14 @@ def _render_topic_allocation(tasks: list[dict]) -> None:
         skill = task["normalized_skill_name"]
         totals[skill] = totals.get(skill, 0.0) + (task.get("allocated_minutes") or 0.0)
         labels[skill] = task.get("display_name") or skill
-    for skill, minutes in sorted(totals.items(), key=lambda kv: kv[1], reverse=True):
-        st.markdown(f"**{labels[skill]}** — {minutes / 60.0:.1f} hours")
+    max_minutes = max(totals.values()) if totals else 1.0
+    with components.panel("topic-allocation"):
+        for skill, minutes in sorted(totals.items(), key=lambda kv: kv[1], reverse=True):
+            components.render_bar(labels[skill].upper(), minutes, max_minutes, value_text=f"{minutes / 60.0:.1f}h")
 
 
 def _render_tasks(tasks: list[dict], on_toggle) -> None:
-    st.subheader("🗓️ Daily Study Tasks")
+    components.render_section_header("Daily Study Tasks")
     if not tasks:
         st.caption("No tasks scheduled yet.")
         return
@@ -190,24 +198,24 @@ def _render_tasks(tasks: list[dict], on_toggle) -> None:
     for day_index in sorted(by_day):
         day_tasks = by_day[day_index]
         day_label = day_tasks[0].get("scheduled_date") or f"Day {day_index + 1}"
-        st.markdown(f"**{day_label}**")
-        for task in day_tasks:
-            label = f"{task.get('display_name') or task['normalized_skill_name']} — {task.get('allocated_minutes', 0):.0f} min ({task.get('task_description') or ''})"
-            checked = st.checkbox(label, value=bool(task["is_complete"]), key=f"task_{task['id']}")
-            if checked != bool(task["is_complete"]):
-                on_toggle(task["id"], checked)
-                st.rerun()
+        with components.panel(f"day-{day_index}"):
+            st.markdown(f'<p class="rr-eyebrow">{day_label}</p>', unsafe_allow_html=True)
+            for task_index, task in enumerate(day_tasks):
+                label = f"{task.get('display_name') or task['normalized_skill_name']} — {task.get('allocated_minutes', 0):.0f} min ({task.get('task_description') or ''})"
+                checked = st.checkbox(label, value=bool(task["is_complete"]), key=f"task_{task['id']}")
+                if checked != bool(task["is_complete"]):
+                    on_toggle(task["id"], checked)
+                    st.rerun()
 
 
 def _render_diagnostic_form(role_family: str | None, on_submit) -> None:
-    st.subheader("🧪 Enter a Diagnostic Result")
-    st.caption("Recording a real diagnostic replans your remaining (incomplete) schedule - completed tasks are never touched.")
+    components.render_section_header("Enter a Diagnostic Result", "Recording a real diagnostic replans your remaining (incomplete) schedule - completed tasks are never touched.")
     topics = sorted(get_readiness_weights(role_family).keys())
     with st.form("diagnostic_form", clear_on_submit=True):
         topic = st.selectbox("Topic", options=topics, format_func=lambda t: t.replace("_", " ").title())
         observed_level = st.slider("Observed level (0-10)", 0.0, 10.0, 5.0, 0.5)
         confidence = st.slider("Confidence in this result", 0.0, 1.0, 0.9, 0.05)
-        submitted = st.form_submit_button("Submit diagnostic & replan")
+        submitted = st.form_submit_button("Submit Diagnostic & Replan", type="primary")
     if submitted:
         on_submit(topic, observed_level, confidence)
 
@@ -215,10 +223,14 @@ def _render_diagnostic_form(role_family: str | None, on_submit) -> None:
 def _render_diagnostic_result(result: dict) -> None:
     st.info(result["message"])
     st.caption("This reflects the deterministic scoring model's before/after numbers only - not a claim about what specifically caused them.")
-    cols = st.columns(2)
     before, after = result["before"], result["after"]
-    cols[0].metric("Overall readiness before", f"{before:.1f}")
-    cols[1].metric("Overall readiness after", f"{after:.1f}", delta=f"{after - before:+.1f}")
+    components.render_metric_strip(
+        [
+            {"label": "Readiness Before", "value": f"{before:.1f}"},
+            {"label": "Readiness After", "value": f"{after:.1f}", "tone": "positive" if after >= before else "negative"},
+            {"label": "Change", "value": f"{after - before:+.1f}", "tone": "positive" if after >= before else "negative"},
+        ]
+    )
 
 
 # ---------------------------------------------------------------------
@@ -233,13 +245,13 @@ if is_demo_mode():
     readiness = _demo_current_readiness()
     _render_header(meta["interview_date"], meta["days_remaining"], meta["hours_available_per_day"], meta["total_available_minutes"], readiness)
 
-    st.divider()
+    components.divider()
     _render_topic_allocation(st.session_state["demo_prep_tasks"])
 
-    st.divider()
+    components.divider()
     _render_tasks(st.session_state["demo_prep_tasks"], _demo_mark_task_complete)
 
-    st.divider()
+    components.divider()
 
     def _on_demo_submit(topic: str, observed_level: float, confidence: float) -> None:
         result = _demo_submit_diagnostic(topic, observed_level, confidence)
@@ -264,7 +276,7 @@ else:
     applications = tracking.list_applications_with_details(user_id)
     with_interview = [a for a in applications if a.get("interview_date")]
     if not with_interview:
-        empty_state("No applications with an interview date yet", detail="Set an interview date on the Applications page first.")
+        components.render_empty_state("No applications with an interview date yet", detail="Set an interview date on the Applications page first.")
         st.stop()
     with_interview.sort(key=lambda a: a["interview_date"])
 
@@ -291,13 +303,13 @@ else:
 
     _render_header(plan["interview_date"], plan["days_remaining"], plan["hours_available_per_day"], plan["total_available_minutes"], readiness)
 
-    st.divider()
+    components.divider()
     _render_topic_allocation(plan["tasks"])
 
-    st.divider()
+    components.divider()
     _render_tasks(plan["tasks"], lambda task_id, checked: prep.mark_task_complete(task_id, checked))
 
-    st.divider()
+    components.divider()
 
     result_key = f"last_diagnostic_{selected_role_id}"
 

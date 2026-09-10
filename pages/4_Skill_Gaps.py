@@ -21,12 +21,15 @@ import streamlit as st
 from backend.db import candidates as candidates_db
 from backend.matching.confidence import confidence_label
 from backend.services import discovery
-from ui_common import configure_page, database_not_configured_notice, empty_state, get_current_user_id, is_demo_mode
+from ui import components
+from ui_common import configure_page, database_not_configured_notice, get_current_user_id, is_demo_mode
 
 configure_page("Skill Gaps", icon="📉")
-st.title("📉 Skill Gaps")
-st.caption("Your skills combined with every favorite role's requirements - one cross-role picture, computed by the real backend.")
-st.divider()
+components.render_page_header(
+    "Skill Intelligence",
+    "Skill Gaps",
+    "Your skills combined with every favorite role's requirements - one cross-role picture, computed by the real backend.",
+)
 
 
 # ---------------------------------------------------------------------
@@ -107,94 +110,144 @@ else:
     roi_results = discovery.get_skill_roi_for_favorites(user_id)
 
 if not skill_rows:
-    empty_state("No candidate skills tracked yet", detail="Upload a resume to unlock skill gap analysis.")
+    components.render_empty_state("No candidate skills tracked yet", detail="Upload a resume to unlock skill gap analysis.")
     st.stop()
+
+
+# ---------------------------------------------------------------------
+# Top metric strip
+# ---------------------------------------------------------------------
+
+skills_by_confidence = sorted(skill_rows, key=lambda row: row["confidence"])
+components.render_metric_strip(
+    [
+        {"label": "Skills Tracked", "value": str(len(skill_rows))},
+        {"label": "Gaps Detected", "value": str(len(roi_results))},
+        {
+            "label": "Avg. Confidence",
+            "value": f"{(sum(r['confidence'] for r in skill_rows) / len(skill_rows)):.2f}",
+        },
+        {
+            "label": "Highest ROI Skill",
+            "value": roi_results[0].display_skill if roi_results else "—",
+            "tone": "gold" if roi_results else "default",
+        },
+    ]
+)
 
 
 # ---------------------------------------------------------------------
 # 1. Candidate Skills
 # ---------------------------------------------------------------------
 
-st.subheader("🧬 Candidate Skills")
-skill_table = [
-    {
-        "Skill": row.get("display_name") or row["normalized_skill_name"],
-        "Estimated level": f"{row['estimated_level']:g}",
-        "Confidence": f"{row['confidence']:.2f} ({confidence_label(row['confidence'])})",
-        "Evidence count": len(row.get("evidence_snippets") or []),
-    }
-    for row in skill_rows
-]
-st.dataframe(skill_table, hide_index=True, use_container_width=True)
+components.render_section_header("Candidate Skills")
+components.render_table(
+    ["Skill", "Estimated Level", "Confidence", "Evidence"],
+    [
+        [
+            row.get("display_name") or row["normalized_skill_name"],
+            f"{row['estimated_level']:g}",
+            f"{row['confidence']:.2f} ({confidence_label(row['confidence'])})",
+            str(len(row.get("evidence_snippets") or [])),
+        ]
+        for row in skill_rows
+    ],
+)
 
 if not roi_results:
-    st.divider()
-    empty_state(
+    components.divider()
+    components.render_empty_state(
         "No cross-role skill gaps yet",
-        detail="Analyze at least one favorite role (Discover → View full analysis) to see cross-role gaps here.",
+        detail="Analyze at least one favorite role (Discover → View Analysis) to see cross-role gaps here.",
     )
     st.stop()
 
 
 # ---------------------------------------------------------------------
-# 2. Cross-Role Skill Gaps
+# 2. Highest-Leverage Gaps (ranked)
 # ---------------------------------------------------------------------
 
-st.divider()
-st.subheader("🔀 Cross-Role Skill Gaps")
-st.caption("Every skill required by at least one favorite role, computed by backend.matching.cross_role.calculate_skill_roi().")
+components.divider()
+components.render_section_header("Highest-Leverage Gaps", "Every skill required by at least one favorite role, ranked by return on investment.")
 
-roi_table = [
-    {
-        "Skill": result.display_skill,
-        "Roles requiring it": result.roles_requiring_it,
-        "Avg. target level": f"{result.average_target_level:.1f}",
-        "Candidate level": f"{result.candidate_level:g}",
-        "Avg. gap": f"{result.average_gap:.1f}",
-        "Avg. importance": f"{result.average_importance:.1f}",
-        "Skill ROI": f"{result.roi_score:.0f}",
-    }
-    for result in roi_results
-]
-st.dataframe(roi_table, hide_index=True, use_container_width=True)
+for rank, result in enumerate(roi_results, start=1):
+    with components.card(f"gap-{result.normalized_skill}"):
+        header_cols = st.columns([1, 5])
+        with header_cols[0]:
+            components.render_score_badge(result.roi_score, size="sm")
+        with header_cols[1]:
+            st.markdown(f"**{rank:02d}  {result.display_skill}**")
+            components.render_meta_line(
+                [
+                    f"Required by {result.roles_requiring_it} role(s)",
+                    f"Avg. gap {result.average_gap:.1f}",
+                    f"Avg. importance {result.average_importance:.1f}",
+                ]
+            )
+        priority = "HIGH" if result.roi_score >= 70 else "MEDIUM" if result.roi_score >= 40 else "LOW"
+        components.render_status_badge(f"PRIORITY: {priority}", tone="gold" if priority == "HIGH" else "warning" if priority == "MEDIUM" else "default")
 
 
 # ---------------------------------------------------------------------
-# 3. Highlights
+# 3. Cross-Role Skill Gaps table
+# ---------------------------------------------------------------------
+
+components.divider()
+components.render_section_header("Cross-Role Skill Gaps", "Computed by backend.matching.cross_role.calculate_skill_roi().")
+
+components.render_table(
+    ["Skill", "Roles Requiring It", "Avg. Target Level", "Candidate Level", "Avg. Gap", "Avg. Importance", "Skill ROI"],
+    [
+        [
+            result.display_skill,
+            result.roles_requiring_it,
+            f"{result.average_target_level:.1f}",
+            f"{result.candidate_level:g}",
+            f"{result.average_gap:.1f}",
+            f"{result.average_importance:.1f}",
+            components.score_badge_html(result.roi_score, size="sm"),
+        ]
+        for result in roi_results
+    ],
+)
+
+
+# ---------------------------------------------------------------------
+# 4. Highlights
 # ---------------------------------------------------------------------
 
 highest_leverage = roi_results[0]  # already sorted by roi_score descending
 most_common = max(roi_results, key=lambda r: r.roles_requiring_it)
 largest_gap = max(roi_results, key=lambda r: r.average_gap)
-skills_by_confidence = sorted(skill_rows, key=lambda row: row["confidence"])
 lowest_confidence = skills_by_confidence[0]
 
+components.divider()
 highlight_cols = st.columns(4)
 with highlight_cols[0]:
-    with st.container(border=True):
-        st.markdown("**⚡ Highest-Leverage Skill**")
+    with components.panel("h-leverage"):
+        st.markdown('<p class="rr-eyebrow">Highest-Leverage Skill</p>', unsafe_allow_html=True)
         st.write(f"{highest_leverage.display_skill} (ROI {highest_leverage.roi_score:.0f})")
 with highlight_cols[1]:
-    with st.container(border=True):
-        st.markdown("**📋 Most Common Requirement**")
+    with components.panel("h-common"):
+        st.markdown('<p class="rr-eyebrow">Most Common Requirement</p>', unsafe_allow_html=True)
         st.write(f"{most_common.display_skill} ({most_common.roles_requiring_it} role(s))")
 with highlight_cols[2]:
-    with st.container(border=True):
-        st.markdown("**📐 Largest Gap**")
+    with components.panel("h-gap"):
+        st.markdown('<p class="rr-eyebrow">Largest Gap</p>', unsafe_allow_html=True)
         st.write(f"{largest_gap.display_skill} (gap {largest_gap.average_gap:.1f}/10)")
 with highlight_cols[3]:
-    with st.container(border=True):
-        st.markdown("**❓ Lowest-Confidence Estimate**")
+    with components.panel("h-conf"):
+        st.markdown('<p class="rr-eyebrow">Lowest-Confidence Estimate</p>', unsafe_allow_html=True)
         low_conf_name = lowest_confidence.get("display_name") or lowest_confidence["normalized_skill_name"]
         st.write(f"{low_conf_name} ({lowest_confidence['confidence']:.2f})")
 
 
 # ---------------------------------------------------------------------
-# 4. Expandable per-skill detail
+# 5. Expandable per-skill detail
 # ---------------------------------------------------------------------
 
-st.divider()
-st.subheader("🔎 Skill Detail")
+components.divider()
+components.render_section_header("Skill Detail")
 
 skill_row_by_normalized = {row["normalized_skill_name"]: row for row in skill_rows}
 

@@ -4,7 +4,7 @@
     {
       "name": "roleradar-streamlit",
       "runtimeExecutable": ".venv/bin/streamlit",
-      "runtimeArgs": ["run", "app.py", "--server.headless", "true"],
+      "runtimeArgs": ["run", "Dashboard.py", "--server.headless", "true"],
       "port": 8501
     }
   ]

@@ -6,10 +6,9 @@ Skill Gaps" cross-role ROI view.
 This file renders only - every number comes from backend.services.discovery
 (list_role_cards, compare_roles, get_skill_roi_for_favorites), which in
 turn calls the deterministic backend.matching / backend.planning
-functions. Favorites are always read fresh from Postgres via
-backend.services.tracking/discovery on every rerun - never solely from
-st.session_state - so priority/notes/remove actions immediately reflect
-the real, persisted state.
+functions. Favorites are always read fresh from Postgres on every rerun
+- never solely from st.session_state - so priority/notes/remove actions
+immediately reflect the real, persisted state.
 """
 
 from __future__ import annotations
@@ -31,18 +30,15 @@ from backend.matching.gaps import calculate_skill_gaps
 from backend.planning.readiness import calculate_readiness
 from backend.services import discovery, tracking
 from backend.services.discovery import RoleCard
-from ui_common import configure_page, database_not_configured_notice, empty_state, get_current_user_id, is_demo_mode
+from ui import components
+from ui_common import configure_page, database_not_configured_notice, get_current_user_id, is_demo_mode
 
 configure_page("Favorites", icon="🚩")
-st.title("🚩 Favorites")
-st.caption("Saved roles, priority, notes, fit, readiness, and application stage - persisted in Postgres, not session state.")
-st.divider()
-
-_PRIORITY_BADGE = {"dream": "💎 Dream", "high": "🔥 High", "interested": "🙂 Interested", "backup": "🧊 Backup"}
-
-
-def _priority_badge(priority: str | None) -> str:
-    return _PRIORITY_BADGE.get(priority, "—") if priority else "—"
+components.render_page_header(
+    "Watchlist",
+    "Favorites",
+    "Saved roles, priority, notes, fit, readiness, and application stage - persisted in Postgres, not session state.",
+)
 
 
 # ---------------------------------------------------------------------
@@ -113,41 +109,47 @@ else:
     cards = [card for card in discovery.list_role_cards(user_id) if card.is_saved]
 
 if not cards:
-    empty_state("No saved roles yet", detail="Flag roles you're interested in from the Discover page to see them here.")
+    components.render_empty_state("No saved roles yet", detail="Flag roles you're interested in from the Discover page to see them here.")
     st.stop()
 
 
 # ---------------------------------------------------------------------
-# 1. All saved roles
+# 1. All saved roles (watchlist)
 # ---------------------------------------------------------------------
 
 for card in cards:
-    with st.container(border=True):
-        header_cols = st.columns([3, 1])
+    with components.card(f"fav-{card.role_id}"):
+        header_cols = st.columns([4, 1])
         with header_cols[0]:
-            st.markdown(f"**{card.title}** at {card.company}")
-            meta_bits = []
+            st.markdown(f"**{card.title}**")
+            meta_bits = [card.company]
             if card.location:
                 meta_bits.append(card.location)
             if card.deadline:
                 meta_bits.append(f"Deadline {card.deadline}")
-            meta_bits.append(f"Stage: `{card.application_status}`" if card.application_status else "Stage: not tracked")
-            st.caption(" · ".join(meta_bits))
+            meta_bits.append(card.application_status.upper() if card.application_status else "NOT TRACKED")
+            components.render_meta_line(meta_bits)
         with header_cols[1]:
-            st.markdown(_priority_badge(card.priority))
+            components.render_priority_badge(card.priority)
 
         metric_cols = st.columns(3)
-        metric_cols[0].metric("Fit", f"{card.fit_score:.0f}" if card.fit_score is not None else "—")
-        metric_cols[1].metric("Readiness", f"{card.readiness_score:.0f}" if card.readiness_score is not None else "—")
-        metric_cols[2].metric("Deadline", card.deadline or "—")
+        with metric_cols[0]:
+            st.markdown('<p class="rr-metric-label">Fit</p>', unsafe_allow_html=True)
+            components.render_score_badge(card.fit_score, size="sm")
+        with metric_cols[1]:
+            st.markdown('<p class="rr-metric-label">Readiness</p>', unsafe_allow_html=True)
+            components.render_score_badge(card.readiness_score, size="sm")
+        with metric_cols[2]:
+            st.markdown('<p class="rr-metric-label">Deadline</p>', unsafe_allow_html=True)
+            st.markdown(f'<span class="rr-meta">{card.deadline or "—"}</span>', unsafe_allow_html=True)
 
-        if st.button("🔬 View full analysis", key=f"analysis_{card.role_id}"):
+        if st.button("View Full Analysis", key=f"analysis_{card.role_id}", type="primary"):
             st.session_state["selected_role_id"] = card.role_id
             st.switch_page("pages/7_Role_Analysis.py")
 
         if demo:
             if card.notes:
-                st.caption(f"📝 {card.notes}")
+                components.render_meta_line([f"Note: {card.notes}"])
             continue
 
         with st.expander("Edit priority / notes / unsave"):
@@ -174,9 +176,8 @@ for card in cards:
 # 2. Compare Favorites
 # ---------------------------------------------------------------------
 
-st.divider()
-st.header("⚖️ Compare Favorites")
-st.caption("Select 2-4 saved roles to compare fit, readiness, top skill gaps, and estimated prep burden side by side.")
+components.divider()
+components.render_section_header("Compare Favorites", "Select 2-4 saved roles to compare fit, readiness, top skill gaps, and estimated prep burden side by side.")
 
 card_by_id = {card.role_id: card for card in cards}
 selected_ids = st.multiselect(
@@ -213,38 +214,36 @@ else:
     for col, comparison, role_id in zip(compare_cols, comparisons, selected_ids):
         source_card = card_by_id[role_id]
         with col:
-            st.markdown(f"**{comparison.role.title}**")
-            st.caption(comparison.role.company)
-            st.metric("Fit", f"{comparison.fit_score:.0f}")
-            st.metric("Readiness", f"{comparison.readiness_score:.0f}" if comparison.readiness_score is not None else "—")
-            st.caption(f"Technical: {comparison.fit_components['technical']:.0f}")
-            st.caption(f"Experience: {comparison.fit_components['experience']:.0f}")
-            st.caption(f"Domain: {comparison.fit_components['domain']:.0f}")
-            st.markdown("**Top gaps**")
-            if comparison.top_gaps:
-                for gap in comparison.top_gaps:
-                    st.caption(f"{gap.skill} (gap {gap.gap:g})" + (" *" if gap.required else ""))
-            else:
-                st.caption("None.")
-            st.metric(
-                "Est. prep hours",
-                f"{comparison.prep_hours_allocated:.0f}h" if comparison.prep_hours_allocated is not None else "—",
-            )
-            st.caption(f"Deadline: {source_card.deadline}" if source_card.deadline else "Deadline: —")
+            with components.panel(f"compare-{role_id}"):
+                st.markdown(f"**{comparison.role.title}**")
+                components.render_meta_line([comparison.role.company])
+                components.render_bar("FIT", comparison.fit_score)
+                if comparison.readiness_score is not None:
+                    components.render_bar("READINESS", comparison.readiness_score)
+                st.markdown('<p class="rr-metric-label">Top Gaps</p>', unsafe_allow_html=True)
+                if comparison.top_gaps:
+                    components.render_tags(
+                        [f"{gap.skill} ({gap.gap:g})" + (" *" if gap.required else "") for gap in comparison.top_gaps],
+                        kind="gap",
+                    )
+                else:
+                    st.caption("None.")
+                prep_text = f"{comparison.prep_hours_allocated:.0f}h" if comparison.prep_hours_allocated is not None else "—"
+                components.render_meta_line([f"Est. prep {prep_text}", f"Deadline {source_card.deadline}" if source_card.deadline else "Deadline —"])
 
-    st.markdown("**Summary**")
+    components.render_section_header("Summary")
     summary_cols = st.columns(3)
     with summary_cols[0]:
-        with st.container(border=True):
-            st.markdown("**🏆 Best current match**")
+        with components.panel("summary-best"):
+            st.markdown('<p class="rr-eyebrow">Best Current Match</p>', unsafe_allow_html=True)
             st.write(summary.best_current_match.title if summary.best_current_match else "—")
     with summary_cols[1]:
-        with st.container(border=True):
-            st.markdown("**📈 Highest potential upside**")
+        with components.panel("summary-upside"):
+            st.markdown('<p class="rr-eyebrow">Highest Potential Upside</p>', unsafe_allow_html=True)
             st.write(summary.highest_potential_upside.title if summary.highest_potential_upside else "—")
     with summary_cols[2]:
-        with st.container(border=True):
-            st.markdown("**⏳ Largest prep burden**")
+        with components.panel("summary-burden"):
+            st.markdown('<p class="rr-eyebrow">Largest Prep Burden</p>', unsafe_allow_html=True)
             st.write(summary.largest_prep_burden.title if summary.largest_prep_burden else "—")
 
 
@@ -252,9 +251,8 @@ else:
 # 3. Common Skill Gaps
 # ---------------------------------------------------------------------
 
-st.divider()
-st.header("🧩 Common Skill Gaps")
-st.caption("Skills needed across your saved roles, ranked by return on investment (backend.matching.cross_role).")
+components.divider()
+components.render_section_header("Common Skill Gaps", "Skills needed across your saved roles, ranked by return on investment (backend.matching.cross_role).")
 
 if demo:
     roi_results = calculate_skill_roi(_DEMO_PROFILE, list(_DEMO_CONTEXTS_BY_ROLE_ID.values()))
@@ -265,20 +263,23 @@ if not roi_results:
     st.caption("No skill requirements found across your saved roles yet.")
 else:
     top_skill = roi_results[0]
-    st.success(
-        f"**Highest-leverage skill: {top_skill.display_skill}** — needed by {top_skill.roles_requiring_it} "
-        f"saved role(s), ROI {top_skill.roi_score:.0f}/100."
+    components.render_status_badge(
+        f"HIGHEST-LEVERAGE: {top_skill.display_skill} · {top_skill.roles_requiring_it} ROLE(S) · ROI {top_skill.roi_score:.0f}",
+        tone="gold",
     )
+    st.markdown("<br/>", unsafe_allow_html=True)
 
-    table_rows = [
-        {
-            "Skill": result.display_skill,
-            "Roles requiring it": result.roles_requiring_it,
-            "Avg. gap": f"{result.average_gap:.1f}",
-            "Avg. importance": f"{result.average_importance:.1f}",
-            "Skill ROI": f"{result.roi_score:.0f}",
-            "Affected roles": ", ".join(f"{r.title} ({r.company})" for r in result.affected_roles),
-        }
-        for result in roi_results
-    ]
-    st.dataframe(table_rows, hide_index=True, use_container_width=True)
+    components.render_table(
+        ["Skill", "Roles Requiring It", "Avg. Gap", "Avg. Importance", "Skill ROI", "Affected Roles"],
+        [
+            [
+                result.display_skill,
+                result.roles_requiring_it,
+                f"{result.average_gap:.1f}",
+                f"{result.average_importance:.1f}",
+                components.score_badge_html(result.roi_score, size="sm"),
+                ", ".join(f"{r.title} ({r.company})" for r in result.affected_roles),
+            ]
+            for result in roi_results
+        ],
+    )

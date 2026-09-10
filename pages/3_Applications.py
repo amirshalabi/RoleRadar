@@ -21,19 +21,22 @@ import streamlit as st
 
 from backend.db.applications import VALID_STATUSES
 from backend.services import discovery, tracking
-from ui_common import configure_page, database_not_configured_notice, empty_state, get_current_user_id, is_demo_mode
+from ui import components
+from ui_common import configure_page, database_not_configured_notice, get_current_user_id, is_demo_mode
 
 configure_page("Applications", icon="📋")
-st.title("📋 Applications")
-st.caption("Discovered → Saved → Applied → OA → Interview → Offer / Rejected / Withdrawn.")
-st.divider()
+components.render_page_header(
+    "Application Pipeline",
+    "Applications",
+    "Discovered → Saved → Applied → OA → Interview → Offer / Rejected / Withdrawn.",
+)
 
 STAGE_ORDER = ["discovered", "saved", "applied", "oa", "interview", "offer", "rejected", "withdrawn"]
 STAGE_LABEL = {
     "discovered": "Discovered", "saved": "Saved", "applied": "Applied", "oa": "OA",
     "interview": "Interview", "offer": "Offer", "rejected": "Rejected", "withdrawn": "Withdrawn",
 }
-_PRIORITY_BADGE = {"dream": "💎 Dream", "high": "🔥 High", "interested": "🙂 Interested", "backup": "🧊 Backup"}
+_TERMINAL_TONE = {"offer": "positive", "rejected": "negative", "interview": "gold"}
 
 _DEMO_APPLICATIONS = [
     {
@@ -56,10 +59,9 @@ def _days_until(iso_date: str | None) -> int | None:
     return (date.fromisoformat(iso_date) - date.today()).days
 
 
-def _days_delta_text(days: int | None) -> str | None:
-    """A short delta string for st.metric: 'in 5d', 'today', or '3d ago'. None if `days` is None."""
+def _days_delta_text(days: int | None) -> str:
     if days is None:
-        return None
+        return "—"
     if days < 0:
         return f"{-days}d ago"
     if days == 0:
@@ -106,8 +108,30 @@ else:
         )
 
 if not applications:
-    empty_state("No applications tracked yet", detail="Saving a role from Discover automatically starts tracking it here.")
+    components.render_empty_state("No applications tracked yet", detail="Saving a role from Discover automatically starts tracking it here.")
     st.stop()
+
+
+# ---------------------------------------------------------------------
+# Pipeline metric strip
+# ---------------------------------------------------------------------
+
+_INACTIVE = {"rejected", "withdrawn", "offer"}
+total_count = len(applications)
+active_count = sum(1 for a in applications if a["status"] not in _INACTIVE)
+interview_count = sum(1 for a in applications if a["status"] == "interview")
+offer_count = sum(1 for a in applications if a["status"] == "offer")
+rejected_count = sum(1 for a in applications if a["status"] == "rejected")
+
+components.render_metric_strip(
+    [
+        {"label": "Total", "value": str(total_count)},
+        {"label": "Active", "value": str(active_count), "tone": "gold"},
+        {"label": "Interviews", "value": str(interview_count)},
+        {"label": "Offers", "value": str(offer_count), "tone": "positive"},
+        {"label": "Rejected", "value": str(rejected_count), "tone": "negative"},
+    ]
+)
 
 
 # ---------------------------------------------------------------------
@@ -131,7 +155,7 @@ def _render_prep_plan_action(application: dict) -> None:
     role_id = application["role_id"]
     plan_key = f"show_prep_plan_{role_id}"
 
-    if st.button("🧠 Generate / recalculate prep plan", key=f"prep_btn_{role_id}"):
+    if st.button("Generate / Recalculate Prep Plan", key=f"prep_btn_{role_id}"):
         st.session_state[plan_key] = True
 
     if not st.session_state.get(plan_key):
@@ -147,9 +171,8 @@ def _render_prep_plan_action(application: dict) -> None:
             st.warning(str(exc))
             return
 
-    st.caption(
-        f"{plan.scheduling_days} day(s) remaining · {plan.hours_available_per_day:g}h/day · "
-        f"{plan.total_available_minutes:.0f} minutes available"
+    components.render_meta_line(
+        [f"{plan.scheduling_days} day(s) remaining", f"{plan.hours_available_per_day:g}h/day", f"{plan.total_available_minutes:.0f} min available"]
     )
     if plan.notes:
         for note in plan.notes:
@@ -206,27 +229,41 @@ def _demo_study_plan(application: dict):
 
 
 def _render_application(application: dict) -> None:
-    with st.container(border=True):
+    with components.card(f"app-{application['role_id']}"):
         header_cols = st.columns([3, 1])
         with header_cols[0]:
-            st.markdown(f"**{application['title']}** at {application['company']}")
-            st.markdown(f"`{STAGE_LABEL.get(application['status'], application['status'])}`")
+            st.markdown(f"**{application['title']}**")
+            components.render_meta_line([application["company"]])
         with header_cols[1]:
-            st.markdown(_PRIORITY_BADGE.get(application["priority"], "—") if application["priority"] else "—")
+            components.render_status_badge(
+                STAGE_LABEL.get(application["status"], application["status"]).upper(),
+                tone=_TERMINAL_TONE.get(application["status"], "default"),
+            )
 
         indicator_cols = st.columns(4)
-        indicator_cols[0].metric("Fit", f"{application['fit_score']:.0f}" if application["fit_score"] is not None else "—")
-        indicator_cols[1].metric("Readiness", f"{application['readiness_score']:.0f}" if application["readiness_score"] is not None else "—")
-        deadline_days = _days_until(application["deadline"])
-        indicator_cols[2].metric(
-            "Deadline", application["deadline"] or "—",
-            delta=_days_delta_text(deadline_days), delta_color="off",
-        )
-        interview_days = _days_until(application["interview_date"])
-        indicator_cols[3].metric(
-            "Interview", application["interview_date"] or "—",
-            delta=_days_delta_text(interview_days), delta_color="off",
-        )
+        with indicator_cols[0]:
+            st.markdown('<p class="rr-metric-label">Fit</p>', unsafe_allow_html=True)
+            components.render_score_badge(application["fit_score"], size="sm")
+        with indicator_cols[1]:
+            st.markdown('<p class="rr-metric-label">Readiness</p>', unsafe_allow_html=True)
+            components.render_score_badge(application["readiness_score"], size="sm")
+        with indicator_cols[2]:
+            deadline_days = _days_until(application["deadline"])
+            st.markdown('<p class="rr-metric-label">Deadline</p>', unsafe_allow_html=True)
+            st.markdown(
+                f'<span class="rr-meta">{application["deadline"] or "—"} ({_days_delta_text(deadline_days)})</span>',
+                unsafe_allow_html=True,
+            )
+        with indicator_cols[3]:
+            interview_days = _days_until(application["interview_date"])
+            st.markdown('<p class="rr-metric-label">Interview</p>', unsafe_allow_html=True)
+            st.markdown(
+                f'<span class="rr-meta">{application["interview_date"] or "—"} ({_days_delta_text(interview_days)})</span>',
+                unsafe_allow_html=True,
+            )
+
+        if application["priority"]:
+            components.render_priority_badge(application["priority"])
 
         if application["notes"]:
             st.caption(f"📝 {application['notes']}")
@@ -263,7 +300,7 @@ def _render_application(application: dict) -> None:
             )
             new_notes = st.text_area("Notes", value=application["notes"], key=f"appnotes_{application['role_id']}")
 
-            if st.button("Save", key=f"save_app_{application['role_id']}"):
+            if st.button("Save", key=f"save_app_{application['role_id']}", type="primary"):
                 old_interview_date = application["interview_date"]
                 new_interview_date_iso = new_interview_date.isoformat() if new_interview_date else None
 
@@ -308,6 +345,6 @@ else:
         stage_applications = [a for a in applications if a["status"] == stage]
         if not stage_applications:
             continue
-        st.subheader(f"{STAGE_LABEL[stage]} ({len(stage_applications)})")
+        components.render_section_header(f"{STAGE_LABEL[stage]} ({len(stage_applications)})")
         for application in stage_applications:
             _render_application(application)

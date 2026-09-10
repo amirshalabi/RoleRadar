@@ -20,12 +20,16 @@ from backend.db import metrics as metrics_db
 from backend.db.client import SupabaseNotConfiguredError
 from backend.services import analytics
 from backend.utils.metrics import PipelineMetrics
-from ui_common import configure_page, database_not_configured_notice, empty_state, get_current_user_id, is_demo_mode
+from ui import components
+from ui.theme import GOLD, TEXT_SECONDARY, style_plotly_fig
+from ui_common import configure_page, database_not_configured_notice, get_current_user_id, is_demo_mode
 
 configure_page("Analytics", icon="📈")
-st.title("📈 Analytics")
-st.caption("Measured engineering/product metrics - every number here is either directly recorded or simple arithmetic over recorded numbers. Nothing is invented.")
-st.divider()
+components.render_page_header(
+    "Quant Desk",
+    "Analytics",
+    "Measured engineering/product metrics - every number here is either directly recorded or simple arithmetic over recorded numbers. Nothing is invented.",
+)
 
 _APPLICATION_STAGE_ORDER = ["discovered", "saved", "applied", "oa", "interview", "offer", "rejected", "withdrawn"]
 _STAGE_LABEL = {
@@ -129,16 +133,15 @@ else:
 # 1. Pipeline
 # ---------------------------------------------------------------------
 
-st.header("⚙️ Pipeline")
-st.caption(
-    "What was ingested, deduplicated, filtered, and sent to the LLM during job ingestion "
-    "(backend.ingestion.concurrent.run_ingestion_pipeline)."
+components.render_section_header(
+    "Pipeline",
+    "What was ingested, deduplicated, filtered, and sent to the LLM during job ingestion (backend.ingestion.concurrent.run_ingestion_pipeline).",
 )
 
 if not runs:
-    empty_state(
+    components.render_empty_state(
         "No ingestion runs recorded yet",
-        detail="Run backend.ingestion.concurrent.run_ingestion_pipeline() to populate pipeline metrics.",
+        detail="Run scripts/run_ingestion.py (or backend.ingestion.concurrent.run_ingestion_pipeline()) to populate pipeline metrics.",
     )
 else:
     latest = runs[0]
@@ -151,16 +154,18 @@ else:
         llm_analyzed=latest.get("jobs_reaching_llm") or 0,
     )
 
-    st.subheader("Most recent run")
-    cols = st.columns(6)
-    cols[0].metric("Jobs ingested", metrics.ingested)
-    cols[1].metric("Duplicates removed", metrics.deduplicated)
-    cols[2].metric("Hard filtered", metrics.hard_filtered)
-    cols[3].metric("Keyword filtered", metrics.keyword_filtered)
-    cols[4].metric("Semantic filtered", metrics.semantic_filtered)
-    cols[5].metric("LLM analyzed", metrics.llm_analyzed)
+    components.render_metric_strip(
+        [
+            {"label": "Jobs Ingested", "value": str(metrics.ingested)},
+            {"label": "Duplicates Removed", "value": str(metrics.deduplicated)},
+            {"label": "Hard Filtered", "value": str(metrics.hard_filtered)},
+            {"label": "Keyword Filtered", "value": str(metrics.keyword_filtered)},
+            {"label": "Semantic Filtered", "value": str(metrics.semantic_filtered)},
+            {"label": "LLM Analyzed", "value": str(metrics.llm_analyzed), "tone": "gold"},
+        ]
+    )
 
-    funnel_stages = ["Ingested", "After dedup", "After hard filter", "After keyword filter", "Reached LLM"]
+    funnel_stages = ["Ingested", "After Dedup", "After Hard Filter", "After Keyword Filter", "Reached LLM"]
     funnel_values = [
         metrics.ingested,
         metrics.eligible_input_count(),
@@ -168,39 +173,45 @@ else:
         max(metrics.eligible_input_count() - metrics.hard_filtered - metrics.keyword_filtered, 0),
         metrics.llm_analyzed,
     ]
-    fig = px.funnel(x=funnel_values, y=funnel_stages, title="Postings remaining after each stage")
-    st.plotly_chart(fig, use_container_width=True)
+    fig = px.funnel(x=funnel_values, y=funnel_stages, title="Postings Remaining After Each Stage")
+    st.plotly_chart(style_plotly_fig(fig), use_container_width=True)
 
     avoidance = metrics.llm_avoidance_rate()
     if avoidance is not None:
-        st.success(f"**LLM workload avoidance: {avoidance * 100:.0f}%** of eligible postings were eliminated before ever reaching the LLM.")
+        components.render_status_badge(f"LLM WORKLOAD AVOIDANCE: {avoidance * 100:.0f}%", tone="positive")
         st.caption(
             "LLM workload avoidance = 1 − (postings sent to the LLM ÷ deduplicated eligible postings). "
             "Higher means cheaper, faster deterministic filtering did more of the work."
         )
 
     if latest.get("llm_estimated_cost_usd"):
-        st.caption(
-            f"LLM usage: {latest.get('llm_prompt_tokens', 0)} prompt + {latest.get('llm_completion_tokens', 0)} "
-            f"completion tokens · est. ${latest['llm_estimated_cost_usd']:.4f}"
+        components.render_meta_line(
+            [
+                f"{latest.get('llm_prompt_tokens', 0)} prompt tokens",
+                f"{latest.get('llm_completion_tokens', 0)} completion tokens",
+                f"est. ${latest['llm_estimated_cost_usd']:.4f}",
+            ]
         )
 
-    st.subheader("⚡ Concurrency")
+    components.render_section_header("Concurrency")
     serial_seconds = latest.get("serial_ingestion_seconds")
     concurrent_seconds = latest.get("concurrent_ingestion_seconds")
     if serial_seconds and concurrent_seconds:
-        speed_cols = st.columns(3)
-        speed_cols[0].metric("Serial ingestion time", f"{serial_seconds:.2f}s")
-        speed_cols[1].metric("Concurrent ingestion time", f"{concurrent_seconds:.2f}s")
-        speed_cols[2].metric("Measured speedup", f"{serial_seconds / concurrent_seconds:.2f}x")
+        components.render_metric_strip(
+            [
+                {"label": "Serial Time", "value": f"{serial_seconds:.2f}s"},
+                {"label": "Concurrent Time", "value": f"{concurrent_seconds:.2f}s"},
+                {"label": "Measured Speedup", "value": f"{serial_seconds / concurrent_seconds:.2f}x", "tone": "gold"},
+            ]
+        )
         st.caption("Speedup = serial time ÷ concurrent time, both measured running the SAME pipeline logic - never simulated.")
     else:
-        empty_state("No timing data for this run", detail="This run didn't record serial/concurrent timing.")
+        components.render_empty_state("No timing data for this run", detail="This run didn't record serial/concurrent timing.")
 
     with st.expander("Run history"):
         for run in runs:
-            with st.container(border=True):
-                st.caption(run.get("finished_at", "unknown time"))
+            with components.panel(f"run-{run.get('finished_at', id(run))}"):
+                components.render_meta_line([run.get("finished_at", "unknown time")])
                 run_metrics = PipelineMetrics(
                     ingested=run.get("jobs_ingested") or 0, deduplicated=run.get("jobs_deduplicated") or 0,
                     hard_filtered=run.get("jobs_eliminated_hard_filter") or 0, keyword_filtered=run.get("jobs_eliminated_keyword_filter") or 0,
@@ -217,32 +228,31 @@ else:
 # 2. Matching
 # ---------------------------------------------------------------------
 
-st.divider()
-st.header("🎯 Matching")
-st.caption("How fit and readiness scores are distributed across the roles you've analyzed, and which skills recur most often.")
+components.divider()
+components.render_section_header("Matching", "How fit and readiness scores are distributed across the roles you've analyzed, and which skills recur most often.")
 
 match_cols = st.columns(2)
 with match_cols[0]:
-    st.subheader("Fit distribution")
+    st.markdown('<p class="rr-eyebrow">Fit Distribution</p>', unsafe_allow_html=True)
     st.caption("Overall fit score (backend.matching.scorer) for every role you've analyzed.")
     if fit_distribution:
         fig = px.histogram(x=fit_distribution, nbins=10, range_x=[0, 100], labels={"x": "Fit score"})
         fig.update_layout(yaxis_title="Roles", showlegend=False)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(style_plotly_fig(fig), use_container_width=True)
     else:
-        empty_state("No fit scores yet", detail="Analyze a role from Discover to see its fit score here.")
+        components.render_empty_state("No fit scores yet", detail="Analyze a role from Discover to see its fit score here.")
 
 with match_cols[1]:
-    st.subheader("Readiness distribution")
+    st.markdown('<p class="rr-eyebrow">Readiness Distribution</p>', unsafe_allow_html=True)
     st.caption("Interview readiness (backend.planning.readiness) for every role with tracked skills and a role family.")
     if readiness_distribution:
         fig = px.histogram(x=readiness_distribution, nbins=10, range_x=[0, 100], labels={"x": "Readiness score"})
         fig.update_layout(yaxis_title="Roles", showlegend=False)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(style_plotly_fig(fig, accent=TEXT_SECONDARY), use_container_width=True)
     else:
-        empty_state("No readiness scores yet", detail="Upload a resume and add a role with a role family to see this.")
+        components.render_empty_state("No readiness scores yet", detail="Upload a resume and add a role with a role family to see this.")
 
-st.subheader("Top recurring skill gaps")
+st.markdown('<p class="rr-eyebrow">Top Recurring Skill Gaps</p>', unsafe_allow_html=True)
 st.caption("Skills required by the most of your favorite roles, ranked by how many roles need them (backend.matching.cross_role).")
 if top_skill_gaps:
     fig = px.bar(
@@ -252,18 +262,17 @@ if top_skill_gaps:
         labels={"x": "Roles requiring it", "y": "Skill"},
     )
     fig.update_layout(yaxis={"categoryorder": "total ascending"})
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(style_plotly_fig(fig), use_container_width=True)
 else:
-    empty_state("No recurring skill gaps yet", detail="Save and analyze at least one favorite role to see this.")
+    components.render_empty_state("No recurring skill gaps yet", detail="Save and analyze at least one favorite role to see this.")
 
 
 # ---------------------------------------------------------------------
 # 3. Applications
 # ---------------------------------------------------------------------
 
-st.divider()
-st.header("📋 Applications")
-st.caption("How many tracked applications sit at each pipeline stage right now.")
+components.divider()
+components.render_section_header("Applications", "How many tracked applications sit at each pipeline stage right now.")
 
 if applications_by_stage:
     ordered_stages = [s for s in _APPLICATION_STAGE_ORDER if s in applications_by_stage]
@@ -272,22 +281,21 @@ if applications_by_stage:
         y=[applications_by_stage[s] for s in ordered_stages],
         labels={"x": "Stage", "y": "Applications"},
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(style_plotly_fig(fig), use_container_width=True)
 else:
-    empty_state("No applications tracked yet", detail="Saving a role from Discover automatically starts tracking it here.")
+    components.render_empty_state("No applications tracked yet", detail="Saving a role from Discover automatically starts tracking it here.")
 
 
 # ---------------------------------------------------------------------
 # 4. Preparation
 # ---------------------------------------------------------------------
 
-st.divider()
-st.header("🧠 Preparation")
-st.caption("How your interview readiness has moved as you've submitted diagnostics, and how much study time you've logged as complete.")
+components.divider()
+components.render_section_header("Preparation", "How your interview readiness has moved as you've submitted diagnostics, and how much study time you've logged as complete.")
 
 prep_cols = st.columns(2)
 with prep_cols[0]:
-    st.subheader("Readiness over time")
+    st.markdown('<p class="rr-eyebrow">Readiness Over Time</p>', unsafe_allow_html=True)
     st.caption("Overall readiness recomputed as of each diagnostic you submitted, in order (backend.planning.readiness).")
     if readiness_over_time:
         fig = px.line(
@@ -295,14 +303,16 @@ with prep_cols[0]:
             markers=True, labels={"x": "Diagnostic taken at", "y": "Overall readiness"},
         )
         fig.update_yaxes(range=[0, 100])
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(style_plotly_fig(fig), use_container_width=True)
     else:
-        empty_state("No diagnostics submitted yet", detail="Submit a diagnostic on the Interview Prep page to start tracking this.")
+        components.render_empty_state("No diagnostics submitted yet", detail="Submit a diagnostic on the Interview Prep page to start tracking this.")
 
 with prep_cols[1]:
-    st.subheader("Completed study minutes")
+    st.markdown('<p class="rr-eyebrow">Completed Study Minutes</p>', unsafe_allow_html=True)
     st.caption("Sum of allocated minutes for tasks you've marked complete, across every application's current study plan.")
     if completed_study_minutes:
-        st.metric("Completed", f"{completed_study_minutes:.0f} min ({completed_study_minutes / 60.0:.1f}h)")
+        components.render_metric_strip(
+            [{"label": "Completed", "value": f"{completed_study_minutes:.0f} min", "sublabel": f"{completed_study_minutes / 60.0:.1f}h", "tone": "gold"}]
+        )
     else:
-        empty_state("No completed study tasks yet", detail="Mark a task complete on the Interview Prep page to see this.")
+        components.render_empty_state("No completed study tasks yet", detail="Mark a task complete on the Interview Prep page to see this.")

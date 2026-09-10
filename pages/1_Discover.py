@@ -13,8 +13,9 @@ saved-state of any role.
 
 There is still no in-app trigger for the ingestion pipeline itself
 (backend.ingestion.concurrent.run_ingestion_pipeline runs outside
-Streamlit today) - this page only browses whatever roles already exist
-in Postgres, and lets you request deep analysis for any of them.
+Streamlit today, or via scripts/run_ingestion.py) - this page only
+browses whatever roles already exist in Postgres, and lets you request
+deep analysis for any of them.
 """
 
 from __future__ import annotations
@@ -26,15 +27,17 @@ import streamlit as st
 from backend.db.applications import VALID_STATUSES
 from backend.services import discovery, tracking
 from backend.services.discovery import RoleCard
-from ui_common import configure_page, database_not_configured_notice, empty_state, get_current_user_id, is_demo_mode
+from ui import components
+from ui_common import configure_page, database_not_configured_notice, get_current_user_id, is_demo_mode
 
 configure_page("Discover", icon="🔍")
-st.title("🔍 Discover")
-st.caption("Roles currently in your RoleRadar database.")
-st.divider()
+components.render_page_header(
+    "Role Intelligence",
+    "Discover",
+    "High-signal roles ranked against your experience, skills, and preferences.",
+)
 
 _PRIORITY_RANK = {"dream": 4, "high": 3, "interested": 2, "backup": 1}
-_PRIORITY_BADGE = {"dream": "💎 Dream", "high": "🔥 High", "interested": "🙂 Interested", "backup": "🧊 Backup"}
 _SORT_OPTIONS = ["Best Fit", "Highest Priority", "Soonest Deadline", "Highest Readiness", "Largest Potential Improvement"]
 
 _DEMO_CARDS = [
@@ -71,33 +74,40 @@ else:
     cards = discovery.list_role_cards(user_id)
 
 if not cards:
-    empty_state(
+    components.render_empty_state(
         "No roles ingested yet",
-        detail="Run backend.ingestion.concurrent.run_ingestion_pipeline() to populate roles - "
-        "see backend/ingestion/jobs.py for the demo source adapters.",
+        detail="Run scripts/run_ingestion.py (or backend.ingestion.concurrent.run_ingestion_pipeline) to populate roles.",
     )
     st.stop()
 
 
 # ---------------------------------------------------------------------
-# Filters
+# Filter bar
 # ---------------------------------------------------------------------
 
-with st.expander("Filters", expanded=False):
-    col1, col2 = st.columns(2)
-    with col1:
-        search_text = st.text_input("Role / company search")
+with components.panel("filters"):
+    row1 = st.columns(3)
+    with row1[0]:
+        search_text = st.text_input("Role / Company")
+    with row1[1]:
         location_text = st.text_input("Location")
-        missing_skill_text = st.text_input("Missing skill", help="Show only analyzed roles with an unmet gap in this skill.")
-    with col2:
-        min_fit = st.slider("Minimum fit", 0, 100, 0)
-        min_readiness = st.slider("Minimum readiness", 0, 100, 0)
-        deadline_on_or_before = st.date_input("Deadline on or before", value=None)
+    with row1[2]:
+        missing_skill_text = st.text_input("Missing Skill")
 
-    status_options = sorted(VALID_STATUSES) + ["not_tracked"]
-    status_filter = st.multiselect("Application status", options=status_options)
+    row2 = st.columns(3)
+    with row2[0]:
+        min_fit = st.slider("Minimum Fit", 0, 100, 0)
+    with row2[1]:
+        min_readiness = st.slider("Minimum Readiness", 0, 100, 0)
+    with row2[2]:
+        deadline_on_or_before = st.date_input("Deadline On Or Before", value=None)
 
-sort_by = st.selectbox("Sort by", options=_SORT_OPTIONS)
+    row3 = st.columns([2, 1])
+    with row3[0]:
+        status_options = sorted(VALID_STATUSES) + ["not_tracked"]
+        status_filter = st.multiselect("Application Status", options=status_options)
+    with row3[1]:
+        sort_by = st.selectbox("Sort By", options=_SORT_OPTIONS)
 
 
 def _matches_filters(card: RoleCard) -> bool:
@@ -146,56 +156,66 @@ def _sort_key(card: RoleCard):
 
 filtered.sort(key=_sort_key)
 
-st.caption(f"Showing {len(filtered)} of {len(cards)} role(s).")
+st.markdown(f'<p class="rr-meta">{len(filtered)} ROLE(S) OF {len(cards)}</p>', unsafe_allow_html=True)
 
 
 # ---------------------------------------------------------------------
-# Cards
+# Role cards - two-column grid on desktop
 # ---------------------------------------------------------------------
 
-for card in filtered:
-    with st.container(border=True):
-        header_cols = st.columns([4, 1, 1])
+
+def _render_card(card: RoleCard) -> None:
+    high_signal = card.fit_score is not None and card.fit_score >= 80
+    with components.card(card.role_id, high_signal=high_signal):
+        header_cols = st.columns([1, 5])
         with header_cols[0]:
-            st.markdown(f"**{card.title}** at {card.company}")
-            meta_bits = []
-            if card.location:
-                meta_bits.append(card.location)
-            if card.deadline:
-                meta_bits.append(f"Deadline {card.deadline}")
-            if card.interview_date:
-                meta_bits.append(f"Interview {card.interview_date}")
-            if meta_bits:
-                st.caption(" · ".join(meta_bits))
-            if card.priority:
-                st.markdown(_PRIORITY_BADGE.get(card.priority, card.priority))
-            elif card.application_status:
-                st.caption(f"Status: `{card.application_status}`")
-
+            components.render_score_badge(card.fit_score)
         with header_cols[1]:
-            if card.fit_score is not None:
-                st.metric("Fit", f"{card.fit_score:.0f}")
-            else:
-                st.caption("Not yet analyzed")
-            if card.readiness_score is not None:
-                st.caption(f"Readiness: {card.readiness_score:.0f}")
+            st.markdown(f"**{card.title}**")
+            components.render_meta_line([card.company])
 
-        with header_cols[2]:
+        meta_bits = []
+        if card.location:
+            meta_bits.append(card.location)
+        if card.deadline:
+            meta_bits.append(f"Deadline {card.deadline}")
+        if card.interview_date:
+            meta_bits.append(f"Interview {card.interview_date}")
+        if card.readiness_score is not None:
+            meta_bits.append(f"Readiness {card.readiness_score:.0f}")
+        components.render_meta_line(meta_bits)
+
+        if card.priority:
+            components.render_priority_badge(card.priority)
+        elif card.application_status:
+            components.render_status_badge(card.application_status.replace("_", " ").upper())
+        elif not card.analyzed:
+            components.render_status_badge("NOT YET ANALYZED")
+
+        if card.top_strengths:
+            components.render_tags(card.top_strengths, kind="strength")
+        if card.top_gap:
+            components.render_tags([card.top_gap], kind="gap")
+
+        action_cols = st.columns(2)
+        with action_cols[0]:
             if is_demo_mode():
-                st.button("🚩 Save" if not card.is_saved else "🚩 Saved", key=f"save_{card.role_id}", disabled=True)
+                st.button("Saved" if card.is_saved else "Save", key=f"save_{card.role_id}", disabled=True, use_container_width=True)
             elif card.is_saved:
-                if st.button("🚩 Saved", key=f"unsave_{card.role_id}", help="Click to remove from favorites"):
+                if st.button("Saved ✓", key=f"unsave_{card.role_id}", help="Click to remove from favorites", use_container_width=True):
                     tracking.unsave_role(user_id, card.role_id)
                     st.rerun()
             else:
-                if st.button("🏳️ Save", key=f"save_{card.role_id}"):
+                if st.button("Save", key=f"save_{card.role_id}", use_container_width=True):
                     tracking.save_role(user_id, card.role_id)
                     st.rerun()
+        with action_cols[1]:
+            if st.button("View Analysis", key=f"detail_{card.role_id}", type="primary", use_container_width=True):
+                st.session_state["selected_role_id"] = card.role_id
+                st.switch_page("pages/7_Role_Analysis.py")
 
-        if card.top_strengths or card.top_gap:
-            strengths_text = ", ".join(card.top_strengths) if card.top_strengths else "—"
-            st.caption(f"✅ Strengths: {strengths_text}" + (f"  ·  ⚠️ Top gap: {card.top_gap}" if card.top_gap else ""))
 
-        if st.button("🔬 View full analysis", key=f"detail_{card.role_id}"):
-            st.session_state["selected_role_id"] = card.role_id
-            st.switch_page("pages/7_Role_Analysis.py")
+grid_cols = st.columns(2, gap="medium")
+for index, card in enumerate(filtered):
+    with grid_cols[index % 2]:
+        _render_card(card)

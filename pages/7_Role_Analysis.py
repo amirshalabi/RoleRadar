@@ -2,7 +2,7 @@
 Role Analysis page: the full detailed fit/readiness breakdown for one
 role. Reached from Discover or Favorites (never browsed to directly -
 those pages set st.session_state["selected_role_id"] before switching
-here) via "View full analysis" buttons.
+here) via "View Analysis" buttons.
 
 This file renders only. Every number on it comes from
 backend.services.discovery:
@@ -27,17 +27,13 @@ import streamlit as st
 from backend.matching.confidence import confidence_label
 from backend.matching.gaps import classify_gap_status
 from backend.services import discovery, tracking
-from ui_common import configure_page, database_not_configured_notice, empty_state, get_current_user_id, is_demo_mode
+from ui import components
+from ui_common import configure_page, database_not_configured_notice, get_current_user_id, is_demo_mode
 
 configure_page("Role Analysis", icon="🔬")
 
 _ALL_DIMENSIONS = ["technical", "experience", "coursework", "domain", "interest", "constraints"]
-_DIMENSION_ICON = {
-    "technical": "🛠️", "experience": "💼", "coursework": "📚",
-    "domain": "🏛️", "interest": "❤️", "constraints": "📍",
-}
-_PRIORITY_BADGE = {"dream": "💎 Dream", "high": "🔥 High", "interested": "🙂 Interested", "backup": "🧊 Backup"}
-_STATUS_BADGE = {"met": "✅ Met", "partial": "🟡 Partial", "uncertain": "❓ Uncertain", "missing": "❌ Missing"}
+_STATUS_TONE = {"met": "positive", "partial": "warning", "uncertain": "warning", "missing": "negative"}
 
 
 # ---------------------------------------------------------------------
@@ -158,15 +154,14 @@ def _render_bullet_list(items: list[str]) -> None:
 
 
 def _render_dimension_section(dimension: str, score: float | None, data: dict[str, Any] | None) -> None:
-    icon = _DIMENSION_ICON.get(dimension, "•")
-    label = f"{icon} {dimension.title()}" + (f" — {score:.0f}/100" if score is not None else "")
+    label = dimension.upper() + (f" — {score:.0f}/100" if score is not None else "")
     with st.expander(label):
         if data is None:
             st.caption("No rationale available for this dimension yet.")
             return
 
         confidence = data["confidence"]
-        st.caption(f"Confidence: {confidence_label(confidence)} ({confidence:.2f})")
+        components.render_status_badge(f"CONFIDENCE: {confidence_label(confidence).upper()} ({confidence:.2f})")
         if data["insufficient_evidence"]:
             st.warning("Insufficient evidence was found for this dimension.")
         st.write(data["rationale"])
@@ -197,7 +192,7 @@ def _render_analysis(
     header: dict[str, Any],
     fit_score: float | None,
     readiness_score: float | None,
-    components: dict[str, float],
+    components_scores: dict[str, float],
     dimension_data: dict[str, dict[str, Any]],
     skill_rows: list[dict[str, Any]],
     why_this_role: str,
@@ -205,57 +200,76 @@ def _render_analysis(
     biggest_risk: str,
     highest_impact_action: str,
 ) -> None:
-    # --- ROLE HEADER ---
-    header_cols = st.columns([3, 1])
-    with header_cols[0]:
-        st.title(header["title"])
-        st.caption(f"{header['company']}" + (f" · {header['location']}" if header.get("location") else ""))
-        meta_bits = []
-        if header.get("deadline"):
-            meta_bits.append(f"Deadline {header['deadline']}")
-        if header.get("interview_date"):
-            meta_bits.append(f"Interview {header['interview_date']}")
-        meta_bits.append(f"Status: `{header['application_status']}`" if header.get("application_status") else "Status: not tracked")
-        st.caption(" · ".join(meta_bits))
-    with header_cols[1]:
-        st.markdown(_PRIORITY_BADGE.get(header.get("priority"), "—"))
-        st.caption("\U0001f6a9 Saved" if header.get("is_saved") else "Not saved")
+    # --- ROLE HEADER (equity-research-memo style) ---
+    components.render_page_header("Role Analysis", f"{header['company']} — {header['title']}")
 
-    st.divider()
+    top_cols = st.columns([1, 4, 2])
+    with top_cols[0]:
+        components.render_score_badge(fit_score, size="lg")
+    with top_cols[1]:
+        components.render_meta_line(
+            [
+                header.get("location"),
+                f"Deadline {header['deadline']}" if header.get("deadline") else None,
+                f"Interview {header['interview_date']}" if header.get("interview_date") else None,
+                header["application_status"].upper() if header.get("application_status") else "NOT TRACKED",
+            ]
+        )
+    with top_cols[2]:
+        components.render_priority_badge(header.get("priority"))
+        st.markdown("<br/>", unsafe_allow_html=True)
+        components.render_status_badge("SAVED" if header.get("is_saved") else "NOT SAVED", tone="gold" if header.get("is_saved") else "default")
 
-    # --- SUMMARY METRICS ---
-    metric_cols = st.columns(3)
-    metric_cols[0].metric("Fit", f"{fit_score:.0f}/100" if fit_score is not None else "—")
-    metric_cols[1].metric("Readiness", f"{readiness_score:.0f}/100" if readiness_score is not None else "—")
-    with metric_cols[2]:
-        st.markdown("**Priority**")
-        st.markdown(_PRIORITY_BADGE.get(header.get("priority"), "Not flagged"))
+    components.render_metric_strip(
+        [
+            {"label": "Fit Score", "value": f"{fit_score:.0f}" if fit_score is not None else "—", "tone": "gold"},
+            {"label": "Readiness", "value": f"{readiness_score:.0f}" if readiness_score is not None else "—"},
+        ]
+    )
 
-    st.divider()
+    # --- EXECUTIVE SUMMARY ---
+    components.render_section_header("Executive Summary")
+    summary_cols = st.columns(2)
+    with summary_cols[0]:
+        with components.panel("match-thesis"):
+            st.markdown('<p class="rr-eyebrow">Match Thesis</p>', unsafe_allow_html=True)
+            st.write(why_this_role)
+        with components.panel("highest-impact"):
+            st.markdown('<p class="rr-eyebrow">Highest-Impact Action</p>', unsafe_allow_html=True)
+            st.write(highest_impact_action)
+    with summary_cols[1]:
+        with components.panel("risks-gaps"):
+            st.markdown('<p class="rr-eyebrow">Risks / Gaps</p>', unsafe_allow_html=True)
+            st.write(why_not_this_role)
+        with components.panel("biggest-risk"):
+            st.markdown('<p class="rr-eyebrow">Biggest Risk</p>', unsafe_allow_html=True)
+            st.write(biggest_risk)
 
     # --- FIT BREAKDOWN ---
-    st.subheader("Fit Breakdown")
+    components.divider()
+    components.render_section_header("Fit Breakdown")
     for dimension in _ALL_DIMENSIONS:
-        _render_dimension_section(dimension, components.get(dimension), dimension_data.get(dimension))
+        _render_dimension_section(dimension, components_scores.get(dimension), dimension_data.get(dimension))
 
-    st.divider()
-
-    # --- SKILL MATCH TABLE ---
-    st.subheader("Skill Match")
+    # --- REQUIREMENT / SKILL MATCH BREAKDOWN ---
+    components.divider()
+    components.render_section_header("Requirement Breakdown")
     if skill_rows:
-        table_rows = [
-            {
-                "Skill": row["skill"] + (" *" if row["required"] else ""),
-                "Candidate level": f"{row['candidate_level']:g}",
-                "Target level": f"{row['target_level']:g}",
-                "Gap": f"{row['gap']:g}",
-                "Importance": f"{row['importance']:g}",
-                "Confidence": f"{row['confidence']:.2f}",
-                "Status": _STATUS_BADGE.get(row["status"], row["status"]),
-            }
-            for row in skill_rows
-        ]
-        st.dataframe(table_rows, hide_index=True, use_container_width=True)
+        components.render_table(
+            ["Skill", "Candidate Level", "Target Level", "Gap", "Importance", "Confidence", "Status"],
+            [
+                [
+                    row["skill"] + (" *" if row["required"] else ""),
+                    f"{row['candidate_level']:g}",
+                    f"{row['target_level']:g}",
+                    f"{row['gap']:g}",
+                    f"{row['importance']:g}",
+                    f"{row['confidence']:.2f}",
+                    components.status_badge_html(row["status"].upper(), tone=_STATUS_TONE.get(row["status"], "default")),
+                ]
+                for row in skill_rows
+            ],
+        )
         st.caption("* required requirement")
 
         missing = [row["skill"] for row in skill_rows if row["status"] == "missing"]
@@ -263,36 +277,31 @@ def _render_analysis(
         callout_cols = st.columns(2)
         with callout_cols[0]:
             if missing:
-                st.error(f"**Missing skills:** {', '.join(missing)}")
+                st.markdown('<p class="rr-eyebrow">Missing Skills</p>', unsafe_allow_html=True)
+                components.render_tags(missing, kind="gap")
             else:
-                st.success("No missing required skills.")
+                components.render_status_badge("NO MISSING REQUIRED SKILLS", tone="positive")
         with callout_cols[1]:
             if uncertain:
-                st.warning(f"**Uncertain skills (low evidence):** {', '.join(uncertain)}")
+                st.markdown('<p class="rr-eyebrow">Uncertain Skills (Low Evidence)</p>', unsafe_allow_html=True)
+                components.render_tags(uncertain, kind="gap")
             else:
-                st.success("No uncertain skills.")
+                components.render_status_badge("NO UNCERTAIN SKILLS", tone="positive")
     else:
         st.caption("No skill requirements to compare against yet.")
 
-    st.divider()
-
-    # --- BOTTOM LINE ---
-    st.subheader("The Bottom Line")
-    bottom_cols = st.columns(2)
-    with bottom_cols[0]:
-        with st.container(border=True):
-            st.markdown("**✅ Why this role?**")
-            st.write(why_this_role)
-        with st.container(border=True):
-            st.markdown("**\U0001f3af Highest-impact action**")
-            st.write(highest_impact_action)
-    with bottom_cols[1]:
-        with st.container(border=True):
-            st.markdown("**⚠️ Why not this role?**")
-            st.write(why_not_this_role)
-        with st.container(border=True):
-            st.markdown("**\U0001f6a8 Biggest risk**")
-            st.write(biggest_risk)
+    # --- RECOMMENDED ACTION ---
+    components.divider()
+    components.render_section_header("Recommended Action")
+    if fit_score is not None and fit_score >= 75:
+        action, tone = "APPLY NOW", "positive"
+    elif fit_score is not None and fit_score >= 50:
+        action, tone = "PREP FIRST", "warning"
+    elif fit_score is not None:
+        action, tone = "LOW PRIORITY", "negative"
+    else:
+        action, tone = "NOT YET SCORED", "default"
+    components.render_status_badge(action, tone=tone)
 
 
 # ---------------------------------------------------------------------
@@ -303,22 +312,22 @@ selected_role_id = st.session_state.get("selected_role_id")
 
 if is_demo_mode():
     if selected_role_id == "demo-2":
-        st.title("Software Engineering Intern")
-        st.caption("Acme Corp · Remote · Deadline 2026-09-14")
+        components.render_page_header("Role Analysis", "Acme Corp — Software Engineering Intern")
+        components.render_meta_line(["Remote", "Deadline 2026-09-14"])
         st.info(
             "This role hasn't been analyzed yet. Generating a full analysis is disabled in Demo mode - "
             "open the **Quantitative Research Intern** card from Discover or Favorites for a complete worked example."
         )
         st.stop()
     if selected_role_id != "demo-1":
-        empty_state("No role selected", detail='Click "View full analysis" on a role from Discover or Favorites first.')
+        components.render_empty_state("No role selected", detail='Click "View Analysis" on a role from Discover or Favorites first.')
         st.stop()
 
     _render_analysis(
         header=_DEMO_HEADER,
         fit_score=_DEMO_FIT_SCORE,
         readiness_score=_DEMO_READINESS,
-        components=_DEMO_COMPONENTS,
+        components_scores=_DEMO_COMPONENTS,
         dimension_data=_DEMO_DIMENSIONS,
         skill_rows=_DEMO_SKILL_ROWS,
         why_this_role=_DEMO_WHY_THIS_ROLE,
@@ -328,7 +337,7 @@ if is_demo_mode():
     )
 else:
     if not selected_role_id:
-        empty_state("No role selected", detail='Click "View full analysis" on a role from Discover or Favorites first.')
+        components.render_empty_state("No role selected", detail='Click "View Analysis" on a role from Discover or Favorites first.')
         st.stop()
 
     user_id = get_current_user_id()
@@ -364,7 +373,7 @@ else:
         "priority": favorite["priority"] if favorite else None,
         "is_saved": favorite is not None,
     }
-    components = analysis.fit_result.components.model_dump()
+    fit_components = analysis.fit_result.components.model_dump()
     dimension_data = {
         d.dimension: {
             "candidate_evidence": d.candidate_evidence,
@@ -397,7 +406,7 @@ else:
         header=header,
         fit_score=analysis.fit_result.overall_score,
         readiness_score=analysis.readiness.overall_readiness if analysis.readiness else None,
-        components=components,
+        components_scores=fit_components,
         dimension_data=dimension_data,
         skill_rows=skill_rows,
         why_this_role=rationale.why_this_role,
