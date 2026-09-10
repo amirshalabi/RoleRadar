@@ -47,6 +47,22 @@ create table if not exists candidate_profiles (
     unique (user_id)
 );
 
+-- Safe to re-run against a database created from an earlier version of
+-- this schema, before coursework/programming_languages/frameworks/
+-- tools/research/domain_experience (backend.candidate.profile.
+-- CandidateProfile fields with no prior column) and resume upload
+-- metadata (filename/content hash/parsed_at, for the Profile page's
+-- "same resume uploaded twice" detection) existed.
+alter table candidate_profiles add column if not exists coursework jsonb not null default '[]'::jsonb;
+alter table candidate_profiles add column if not exists programming_languages jsonb not null default '[]'::jsonb;
+alter table candidate_profiles add column if not exists frameworks jsonb not null default '[]'::jsonb;
+alter table candidate_profiles add column if not exists tools jsonb not null default '[]'::jsonb;
+alter table candidate_profiles add column if not exists research jsonb not null default '[]'::jsonb;
+alter table candidate_profiles add column if not exists domain_experience jsonb not null default '[]'::jsonb;
+alter table candidate_profiles add column if not exists resume_filename text;
+alter table candidate_profiles add column if not exists resume_content_hash text;
+alter table candidate_profiles add column if not exists resume_parsed_at timestamptz;
+
 -- ---------------------------------------------------------------------
 -- candidate_skills
 -- Per-user normalized skill estimates with confidence.
@@ -353,6 +369,26 @@ create table if not exists pipeline_metrics (
     metric_name text not null,
     metric_value numeric(14, 4) not null,
     recorded_at timestamptz not null default now()
+);
+
+-- ---------------------------------------------------------------------
+-- candidate_preferences
+-- User-STATED target roles/locations/employment type/interests - kept
+-- in a separate table (not columns on candidate_profiles) so these
+-- never get overwritten or mixed with resume-INFERRED facts when a
+-- resume is re-parsed (backend.candidate.profile.CandidateProfile has
+-- no matching fields, by design - see backend/services/candidate.py).
+-- ---------------------------------------------------------------------
+create table if not exists candidate_preferences (
+    id uuid primary key default gen_random_uuid(),
+    user_id uuid not null references users(id) on delete cascade,
+    target_role_families jsonb not null default '[]'::jsonb,
+    preferred_locations jsonb not null default '[]'::jsonb,
+    employment_types jsonb not null default '[]'::jsonb,
+    interests jsonb not null default '[]'::jsonb,
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now(),
+    unique (user_id)
 );
 
 -- ---------------------------------------------------------------------

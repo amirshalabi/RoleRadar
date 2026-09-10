@@ -73,7 +73,7 @@ The engineering thesis, repeated everywhere in the codebase: **Python decides, t
 
 Two front ends sit on top of the same `backend/services/*` layer and never contain business logic themselves:
 
-- **Streamlit app** (`Dashboard.py` + `pages/`) — the primary UI: Discover, Favorites, Applications, Skill Gaps, Interview Prep, Analytics, Role Analysis.
+- **Streamlit app** (`Dashboard.py` + `pages/`) — the primary UI: Profile, Discover, Favorites, Applications, Skill Gaps, Interview Prep, Analytics, Role Analysis.
 - **FastAPI app** (`backend/main.py` + `backend/api/`) — a REST surface over the same services (candidate parsing, roles, favorites, applications, plans, assessments, analytics), for programmatic or future non-Streamlit clients.
 
 ```
@@ -134,7 +134,8 @@ Supabase/PostgreSQL, one module per table under `backend/db/`, every table's ide
 | `favorites` | `(user_id, role_id)` | Re-saving a favorite is a no-op — priority/notes are preserved, not reset (a blind upsert here would silently clobber a user's chosen priority). |
 | `applications` | `(user_id, role_id)` | Partial updates preserve every field the caller didn't touch — implemented as an explicit update-if-exists-else-insert, since a plain `ON CONFLICT` upsert would need every column supplied every time. |
 | `role_rationales` | `(user_id, role_id)` | Cached rationale, keyed with a hash of the exact skills+requirements it was generated from — reused as-is until an input actually changes. |
-| `candidate_profiles` | `(user_id)` | One profile row per candidate. |
+| `candidate_profiles` | `(user_id)` | One profile row per candidate, including resume metadata (filename/content hash/parsed-at) used to skip re-parsing an identical resume. |
+| `candidate_preferences` | `(user_id)` | User-STATED target roles/locations/employment type/interests — a separate table from `candidate_profiles` so these never merge with resume-INFERRED facts. |
 
 `study_plans` takes a different approach: no plan is ever deleted or mutated once written. A revision inserts a new row and flips the prior "current" row's `is_current` flag to `false`, so the full version history stays queryable. `ingestion_runs` is deliberately append-only (no unique constraint) — every pipeline execution is a genuinely new audit-log event.
 

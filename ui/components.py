@@ -306,6 +306,77 @@ def render_ranked_list(items: list[dict[str, str]]) -> None:
 
 
 # ---------------------------------------------------------------------
+# Completeness checklist
+# ---------------------------------------------------------------------
+
+
+def render_checklist(items: list[dict[str, Any]]) -> None:
+    """items: [{"label": "Resume", "done": True}] - a done item gets a gold check, a pending one a muted dash. Never a fabricated percentage; see callers for how completion is computed."""
+    rows = []
+    for item in items:
+        mark = "✓" if item["done"] else "—"
+        tone_class = " tone-gold" if item["done"] else ""
+        rows.append(
+            '<div class="rr-checklist-row">'
+            f'<span class="rr-checklist-label">{_esc(item["label"])}</span>'
+            f'<span class="rr-checklist-mark{tone_class}">{mark}</span>'
+            "</div>"
+        )
+    st.markdown(f'<div class="rr-checklist">{"".join(rows)}</div>', unsafe_allow_html=True)
+
+
+# ---------------------------------------------------------------------
+# Skill evidence row (level + confidence shown separately, expandable evidence)
+# ---------------------------------------------------------------------
+
+
+def render_skill_evidence(
+    display_name: str,
+    estimated_level: float,
+    confidence: float,
+    evidence_snippets: list[str],
+) -> None:
+    """
+    One candidate skill: level and confidence shown as two separate
+    bars (never conflated into one number - confidence measures how
+    much resume evidence backs the level estimate, not the level
+    itself), with an expander for the real evidence quotes behind it.
+    Never fabricates evidence - an empty `evidence_snippets` list shows
+    "Limited evidence found in resume," not a made-up quote.
+    """
+    with st.expander(f"{display_name} — {estimated_level:.1f} / 10"):
+        bar_cols = st.columns(2)
+        with bar_cols[0]:
+            render_bar("ESTIMATED LEVEL", estimated_level, 10.0, value_text=f"{estimated_level:.1f}/10")
+        with bar_cols[1]:
+            tone = "positive" if confidence >= 0.6 else "gold" if confidence >= 0.35 else "negative"
+            render_bar("CONFIDENCE", confidence * 100, 100.0, value_text=f"{confidence * 100:.0f}%", tone=tone)
+
+        st.markdown('<p class="rr-eyebrow">Evidence</p>', unsafe_allow_html=True)
+        if evidence_snippets:
+            for snippet in evidence_snippets:
+                st.caption(f"“{snippet}”")
+        else:
+            st.caption("Limited evidence found in resume.")
+
+
+# ---------------------------------------------------------------------
+# Onboarding banner
+# ---------------------------------------------------------------------
+
+
+def render_onboarding_banner(eyebrow: str, title: str, body: str) -> None:
+    st.markdown(
+        '<div class="rr-onboard-banner">'
+        f'<p class="rr-eyebrow">{_esc(eyebrow)}</p>'
+        f"<h3>{_esc(title)}</h3>"
+        f"<p>{_esc(body)}</p>"
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
+
+# ---------------------------------------------------------------------
 # Empty state
 # ---------------------------------------------------------------------
 

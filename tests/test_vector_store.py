@@ -17,6 +17,7 @@ from backend.rag.embeddings import EmbeddingProvider
 from backend.rag.vector_store import (
     CANDIDATE_EVIDENCE_COLLECTION,
     QdrantNotConfiguredError,
+    delete_by_metadata,
     ensure_collection,
     generate_point_id,
     get_qdrant_client,
@@ -44,6 +45,7 @@ class FakeQdrantClient:
         self.created_collections: list[tuple[str, int]] = []
         self.upserted: list[tuple[str, list]] = []
         self.queries: list[dict] = []
+        self.deletes: list[dict] = []
         self._query_points = query_points or []
 
     def collection_exists(self, name: str) -> bool:
@@ -68,6 +70,10 @@ class FakeQdrantClient:
             }
         )
         return SimpleNamespace(points=self._query_points)
+
+    def delete(self, collection_name: str, points_selector, **kwargs):
+        self.deletes.append({"collection_name": collection_name, "points_selector": points_selector})
+        return SimpleNamespace(status="completed")
 
 
 @pytest.fixture(autouse=True)
@@ -125,6 +131,25 @@ def test_generate_point_id_is_valid_uuid_format() -> None:
     point_id = generate_point_id("u1", "", "skill", "python", "text")
 
     assert uuid.UUID(point_id)  # does not raise
+
+
+def test_delete_by_metadata_is_a_noop_when_collection_does_not_exist(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake_client = FakeQdrantClient(existing_collections=set())
+    monkeypatch.setattr("backend.rag.vector_store.get_qdrant_client", lambda: fake_client)
+
+    delete_by_metadata(CANDIDATE_EVIDENCE_COLLECTION, {"user_id": "u1"})
+
+    assert fake_client.deletes == []
+
+
+def test_delete_by_metadata_deletes_by_filter_when_collection_exists(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake_client = FakeQdrantClient(existing_collections={CANDIDATE_EVIDENCE_COLLECTION})
+    monkeypatch.setattr("backend.rag.vector_store.get_qdrant_client", lambda: fake_client)
+
+    delete_by_metadata(CANDIDATE_EVIDENCE_COLLECTION, {"user_id": "u1"})
+
+    assert len(fake_client.deletes) == 1
+    assert fake_client.deletes[0]["collection_name"] == CANDIDATE_EVIDENCE_COLLECTION
 
 
 def test_upsert_chunks_returns_zero_for_empty_input(monkeypatch: pytest.MonkeyPatch) -> None:

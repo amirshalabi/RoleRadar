@@ -550,6 +550,60 @@ div[class*="st-key-rrpanel-"] {{
     margin-bottom: 0.75rem;
 }}
 
+/* ---- Completeness checklist ---- */
+.rr-checklist {{ display: flex; flex-direction: column; }}
+.rr-checklist-row {{
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.4rem 0;
+    border-bottom: 1px solid var(--rr-border);
+    font-family: var(--rr-font-sans);
+    font-size: 0.85rem;
+    color: var(--rr-text-secondary);
+}}
+.rr-checklist-row:last-child {{ border-bottom: none; }}
+.rr-checklist-mark {{
+    font-family: var(--rr-font-mono);
+    color: var(--rr-text-muted);
+    min-width: 1.2rem;
+    text-align: center;
+}}
+.rr-checklist-mark.tone-gold {{ color: var(--rr-gold-bright); font-weight: 600; }}
+
+/* ---- File uploader (resume dropzone) ---- */
+[data-testid="stFileUploaderDropzone"] {{
+    background: var(--rr-surface) !important;
+    border: 1px dashed var(--rr-border-strong) !important;
+    border-radius: 2px !important;
+    transition: border-color 120ms ease;
+}}
+[data-testid="stFileUploaderDropzone"]:hover {{ border-color: var(--rr-gold) !important; }}
+[data-testid="stFileUploaderDropzoneInstructions"] {{ color: var(--rr-text-secondary); }}
+
+/* ---- Onboarding banner ---- */
+.rr-onboard-banner {{
+    border: 1px solid var(--rr-gold);
+    background: linear-gradient(180deg, rgba(215,154,22,0.08), rgba(215,154,22,0.02));
+    padding: 1.1rem 1.3rem;
+    margin-bottom: 1.25rem;
+    border-radius: 2px;
+}}
+.rr-onboard-banner .rr-eyebrow {{ margin-bottom: 0.35rem; }}
+.rr-onboard-banner h3 {{
+    font-family: var(--rr-font-serif);
+    font-size: 1.3rem;
+    margin: 0 0 0.35rem 0;
+    color: var(--rr-text);
+}}
+.rr-onboard-banner p {{
+    font-family: var(--rr-font-sans);
+    font-size: 0.88rem;
+    color: var(--rr-text-secondary);
+    margin: 0;
+    max-width: 60ch;
+}}
+
 /* ---- Sidebar chrome: quick metrics + status footer ---- */
 .rr-sidebar-label {{
     font-family: var(--rr-font-sans);

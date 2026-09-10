@@ -50,6 +50,15 @@ if data is None:
     database_not_configured_notice()
     st.stop()
 
+if not data.profile_status.has_profile:
+    components.render_onboarding_banner(
+        "Start Here",
+        "Start with your resume",
+        "RoleRadar needs your background before it can rank opportunities, estimate readiness, or find skill gaps.",
+    )
+    if st.button("Upload Resume", key="dashboard-onboard-upload", type="primary"):
+        st.switch_page("pages/0_Profile.py")
+
 _STAGE_ORDER = ["discovered", "saved", "applied", "oa", "interview", "offer", "rejected", "withdrawn"]
 _STAGE_LABEL = {
     "discovered": "Discovered", "saved": "Saved", "applied": "Applied", "oa": "OA",
@@ -128,15 +137,32 @@ with left:
     components.render_section_header("Profile")
     with components.panel("dashboard-profile"):
         if data.profile_status.has_profile:
-            st.markdown(f"**Resume on file** · {data.profile_status.skill_count} skills tracked")
-            if data.profile_status.updated_at:
-                components.render_meta_line([f"Last updated {data.profile_status.updated_at}"])
+            st.markdown("**Resume analyzed ✓**")
+            components.render_ranked_list(
+                [
+                    {"rank": "01", "label": "Skills identified", "value": str(data.profile_status.skill_count)},
+                    {"rank": "02", "label": "Projects", "value": str(data.profile_status.project_count)},
+                    {"rank": "03", "label": "Work experiences", "value": str(data.profile_status.experience_count)},
+                ]
+            )
+            if data.profile_status.top_skills:
+                st.markdown('<p class="rr-eyebrow">Top Skills</p>', unsafe_allow_html=True)
+                components.render_tags(data.profile_status.top_skills, kind="gold")
+            profile_cols = st.columns(2)
+            with profile_cols[0]:
+                if st.button("View Profile", key="dashboard-view-profile", use_container_width=True):
+                    st.switch_page("pages/0_Profile.py")
+            with profile_cols[1]:
+                if st.button("Replace Resume", key="dashboard-replace-resume", use_container_width=True):
+                    st.switch_page("pages/0_Profile.py")
         else:
             st.markdown(
-                '<p style="color:var(--rr-text-secondary);font-size:0.9rem;margin:0;">No resume uploaded yet</p>',
+                '<p style="color:var(--rr-text-secondary);font-size:0.9rem;margin:0;">No resume uploaded</p>',
                 unsafe_allow_html=True,
             )
-            st.caption("Upload a resume to unlock fit scoring and readiness tracking.")
+            st.caption("Upload your resume to unlock personalized fit scoring, skill-gap analysis, and interview readiness.")
+            if st.button("Upload Resume", key="dashboard-profile-upload", type="primary", use_container_width=True):
+                st.switch_page("pages/0_Profile.py")
 
     components.render_section_header("Urgent Applications")
     if data.urgent_applications:

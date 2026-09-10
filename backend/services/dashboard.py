@@ -26,7 +26,7 @@ import logging
 from datetime import date, timedelta
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from backend.candidate.profile import (
     CandidateProfile,
@@ -58,6 +58,9 @@ _INACTIVE_STATUSES = {"rejected", "withdrawn", "offer"}
 class ProfileStatus(BaseModel):
     has_profile: bool
     skill_count: int = 0
+    project_count: int = 0
+    experience_count: int = 0
+    top_skills: list[str] = Field(default_factory=list)
     updated_at: str | None = None
 
 
@@ -135,9 +138,13 @@ def _build_dashboard_data(user_id: str) -> DashboardData:
 
     profile_row = candidates_db.get_candidate_profile(user_id)
     skill_rows = candidates_db.list_candidate_skills(user_id)
+    top_skill_rows = sorted(skill_rows, key=lambda row: row["estimated_level"], reverse=True)[:4]
     profile_status = ProfileStatus(
         has_profile=profile_row is not None,
         skill_count=len(skill_rows),
+        project_count=len((profile_row or {}).get("projects") or []),
+        experience_count=len((profile_row or {}).get("experience") or []),
+        top_skills=[row.get("display_name") or row["normalized_skill_name"] for row in top_skill_rows],
         updated_at=(profile_row or {}).get("updated_at"),
     )
 
@@ -360,7 +367,14 @@ def build_demo_dashboard_data() -> DashboardData:
     return DashboardData(
         is_demo=True,
         database_connected=True,
-        profile_status=ProfileStatus(has_profile=True, skill_count=len(profile.skills), updated_at=None),
+        profile_status=ProfileStatus(
+            has_profile=True,
+            skill_count=len(profile.skills),
+            project_count=len(profile.projects),
+            experience_count=len(profile.internships),
+            top_skills=[s.display_name for s in sorted(profile.skills, key=lambda s: s.estimated_level, reverse=True)[:4]],
+            updated_at=None,
+        ),
         top_match=TopMatch(role_id="demo-role-1", role_title=dream_role.title, company=dream_role.company, overall_score=57.4),
         upcoming_interview=UpcomingInterview(
             role_id="demo-role-1", role_title=dream_role.title, company=dream_role.company,

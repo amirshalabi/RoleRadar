@@ -154,6 +154,25 @@ def upsert_chunks(
     return len(points)
 
 
+def delete_by_metadata(collection_name: str, metadata_filter: dict[str, Any]) -> None:
+    """
+    Delete every point in `collection_name` whose payload matches every
+    key/value in `metadata_filter` (e.g. {"user_id": ...} to clear one
+    candidate's evidence before re-indexing a replaced resume, so a
+    changed/removed skill's old evidence text - which would otherwise
+    hash to a different, never-cleaned-up point ID, see this module's
+    docstring - doesn't linger as stale retrieval results forever).
+
+    A no-op, not an error, if `collection_name` doesn't exist yet (e.g.
+    the very first resume upload for a user, before anything has ever
+    been indexed).
+    """
+    client = get_qdrant_client()
+    if not client.collection_exists(collection_name):
+        return
+    client.delete(collection_name=collection_name, points_selector=_build_filter(metadata_filter))
+
+
 def _build_filter(metadata_filter: dict[str, Any]) -> Filter:
     conditions = [
         FieldCondition(key=key, match=MatchValue(value=value))
