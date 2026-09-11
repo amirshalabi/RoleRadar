@@ -19,6 +19,7 @@ is what actually draws the border/padding/hover/top-accent.
 from __future__ import annotations
 
 import html
+import uuid
 from contextlib import contextmanager
 from typing import Any, Iterable, Literal
 
@@ -382,7 +383,8 @@ def render_onboarding_banner(eyebrow: str, title: str, body: str) -> None:
 
 
 def render_empty_state(message: str, detail: str | None = None) -> None:
-    with panel("empty"):
+    """A page may render more than one empty state in a single run (e.g. Analytics, several sections at once) - each gets its own random key so they never collide, since this container never holds interactive state that would need a stable identity across reruns."""
+    with panel(f"empty-{uuid.uuid4().hex[:8]}"):
         st.markdown(f'<p style="color:var(--rr-text-secondary);font-size:0.9rem;margin:0;">{_esc(message)}</p>', unsafe_allow_html=True)
         if detail:
             st.caption(detail)

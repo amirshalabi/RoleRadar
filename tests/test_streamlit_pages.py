@@ -21,12 +21,15 @@ from streamlit.testing.v1 import AppTest
 _PAGES_DIR = Path(__file__).resolve().parent.parent / "pages"
 
 from backend.db import applications as applications_db
+from backend.db import assessment_results as assessment_results_db
 from backend.db import candidate_preferences as candidate_preferences_db
 from backend.db import candidates as candidates_db
 from backend.db import favorites as favorites_db
+from backend.db import metrics as metrics_db
 from backend.db import rationales as rationales_db
 from backend.db import role_requirements as role_requirements_db
 from backend.db import roles as roles_db
+from backend.db import study_plans as study_plans_db
 from backend.db import upserts as upserts_db
 from backend.db import users as users_db
 from tests._fake_supabase import FakeSupabaseClient
@@ -38,7 +41,7 @@ def fake_client(monkeypatch: pytest.MonkeyPatch) -> FakeSupabaseClient:
     for module in (
         roles_db, candidates_db, favorites_db, applications_db,
         role_requirements_db, rationales_db, upserts_db, users_db,
-        candidate_preferences_db,
+        candidate_preferences_db, metrics_db, assessment_results_db, study_plans_db,
     ):
         monkeypatch.setattr(module, "get_client", lambda c=client: c)
     return client
@@ -103,6 +106,22 @@ def test_profile_page_shows_parsed_profile_after_resume_saved(fake_client: FakeS
 
     assert not at.exception
     assert any("Technical Skills" in text for text in _markdown_texts(at))
+
+
+def test_analytics_page_renders_with_multiple_empty_states_at_once(fake_client: FakeSupabaseClient) -> None:
+    """
+    A brand-new account with nothing populated hits every empty state on
+    this page in one run (pipeline, fit distribution, readiness
+    distribution, top skill gaps, applications, readiness over time,
+    completed study minutes) - regression test for a real
+    StreamlitDuplicateElementKey crash caused by render_empty_state()
+    reusing the same static container key across repeated calls on one
+    page (fixed by giving each call its own random key).
+    """
+    at = AppTest.from_file(str(_PAGES_DIR / "6_Analytics.py")).run(timeout=30)
+
+    assert not at.exception
+    assert any("No ingestion runs recorded yet" in text for text in _markdown_texts(at))
 
 
 def test_discover_page_shows_database_not_configured_notice_without_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
